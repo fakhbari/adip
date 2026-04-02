@@ -1,0 +1,346 @@
+// ADIP - ArchDoc Intelligence Platform
+// Prisma Schema for Architecture Documentation Management
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Repository Management
+// ============================================
+
+model RepositoryConnection {
+  id            String   @id @default(cuid())
+  name          String
+  type          String   // "bitbucket", "gitlab", "github"
+  url           String
+  accessToken   String?
+  username      String?
+  isActive      Boolean  @default(true)
+  lastSync      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  repositories  Repository[]
+}
+
+model Repository {
+  id               String   @id @default(cuid())
+  connectionId     String?
+  connection       RepositoryConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  externalId       String?  // ID from external VCS (null for Direct URL)
+  name             String
+  slug             String   @unique
+  description      String?
+  languages        String?  // JSON array of detected languages ["TypeScript", "Python"]
+  frameworks       String?  // JSON array of detected frameworks ["NestJS", "FastAPI"]
+  defaultBranch    String   @default("main")
+  lastCommitHash   String?
+  lastAnalyzedAt   DateTime?
+  isActive         Boolean  @default(true)
+  
+  // AI Provider - if null, use system default
+  aiProviderId     String?
+  aiProvider       AIProvider? @relation(fields: [aiProviderId], references: [id], onDelete: SetNull)
+  
+  // Direct URL support (for public repos without connection)
+  repositoryPath   String?  // org/repo-name for connections
+  repositoryUrl    String?  // Full URL for direct access
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  documents        Document[]
+  technologies     TechnologyUsage[]
+  adrs             ADR[]
+  analysisRuns     AnalysisRun[]
+}
+
+// ============================================
+// Documentation Types
+// ============================================
+
+enum DocumentType {
+  C4_CONTEXT
+  C4_CONTAINER
+  C4_COMPONENT
+  ADR
+  OPENAPI
+  ASYNCAPI
+  CONTEXT_MAP
+  DATA_CATALOG
+}
+
+enum DocumentStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+  NEEDS_REVIEW
+}
+
+model Document {
+  id             String         @id @default(cuid())
+  repositoryId   String
+  repository     Repository     @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  type           DocumentType
+  status         DocumentStatus @default(PENDING)
+  title          String?
+  content        String?        // Markdown or YAML content
+  filePath       String?        // Path in repository
+  version        Int            @default(1)
+  generatedAt    DateTime?
+  generatedBy    String?        // AI model used
+  metadata       String?        // JSON metadata
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  
+  @@unique([repositoryId, type])
+}
+
+// ============================================
+// Architecture Decision Records (ADR)
+// ============================================
+
+enum ADRStatus {
+  PROPOSED
+  ACCEPTED
+  DEPRECATED
+  SUPERSEDED
+  REJECTED
+}
+
+model ADR {
+  id             String     @id @default(cuid())
+  repositoryId   String
+  repository     Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  number         Int
+  title          String
+  status         ADRStatus  @default(PROPOSED)
+  context        String     // Background and problem statement
+  decision       String     // The decision made
+  consequences   String?    // Consequences of the decision
+  alternatives   String?    // Alternatives considered
+  triggers       String?    // JSON - What triggered this ADR
+  relatedCommits String?    // JSON array of commit hashes
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  supersededBy   String?    // ID of newer ADR if superseded
+  
+  @@unique([repositoryId, number])
+}
+
+// ============================================
+// Technology Radar
+// ============================================
+
+enum RadarRing {
+  ADOPT
+  TRIAL
+  ASSESS
+  HOLD
+}
+
+enum RadarQuadrant {
+  TECHNIQUES
+  TOOLS
+  PLATFORMS
+  LANGUAGES_FRAMEWORKS
+}
+
+model Technology {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  category      String   // e.g., "Database", "Framework", "Cloud Service"
+  description   String?
+  website       String?
+  logo          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  usages        TechnologyUsage[]
+  radarItems    RadarItem[]
+}
+
+model TechnologyUsage {
+  id             String      @id @default(cuid())
+  repositoryId   String
+  repository     Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  technologyId   String
+  technology     Technology  @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+  version        String?     // Version used
+  sourceFile     String?     // Where it was detected (package.json, pom.xml, etc.)
+  detectedAt     DateTime    @default(now())
+  
+  @@unique([repositoryId, technologyId])
+}
+
+model RadarItem {
+  id              String        @id @default(cuid())
+  technologyId    String
+  technology      Technology    @relation(fields: [technologyId], references: [id], onDelete: Cascade)
+  ring            RadarRing
+  quadrant        RadarQuadrant
+  reason          String?       // Why placed in this ring
+  organizationPos String?       // "adopt", "trial", "assess", "hold" - our position
+  thoughtworksPos String?       // ThoughtWorks position for comparison
+  gartnerPos      String?       // Gartner position for comparison
+  gapStatus       String?       // "aligned", "behind", "ahead", "missing"
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  @@unique([technologyId, quadrant])
+}
+
+model GapAnalysis {
+  id              String   @id @default(cuid())
+  technologyName  String
+  category        String
+  orgPosition     String?  // Our position
+  twPosition      String?  // ThoughtWorks position
+  gartnerPosition String?  // Gartner position
+  gapType         String?  // "aligned", "behind", "ahead", "opportunity", "technical_debt"
+  recommendation  String?  // AI-generated recommendation
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// Analysis & Scheduling
+// ============================================
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model AnalysisRun {
+  id             String   @id @default(cuid())
+  repositoryId   String
+  repository     Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  triggeredBy    String   // "scheduler", "manual", "webhook"
+  status         RunStatus @default(QUEUED)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  documentsGenerated Int   @default(0)
+  errors         String?  // JSON array of errors
+  duration       Int?     // Duration in seconds
+  createdAt      DateTime @default(now())
+}
+
+model ScheduleConfig {
+  id              String   @id @default(cuid())
+  name            String
+  type            String   // "full_scan", "quick_check"
+  cronExpression  String
+  isActive        Boolean  @default(true)
+  lastRun         DateTime?
+  nextRun         DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================
+// AI Providers
+// ============================================
+
+enum AIProviderType {
+  OPENAI
+  ANTHROPIC
+  AZURE_OPENAI
+  LOCAL_OLLAMA
+  CUSTOM
+}
+
+model AIProvider {
+  id            String         @id @default(cuid())
+  name          String         // Display name
+  type          AIProviderType
+  apiKey        String?        // Encrypted API key
+  baseUrl       String?        // For custom/ollama endpoints
+  modelName     String         // e.g., "gpt-4", "claude-3-opus"
+  isActive      Boolean        @default(true)
+  isDefault     Boolean        @default(false)  // System default provider
+  maxTokens     Int            @default(4096)
+  temperature   Float          @default(0.7)
+  metadata      String?        // JSON for additional config
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  repositories  Repository[]
+  
+  @@index([isDefault])
+}
+
+// ============================================
+// Settings & Configuration
+// ============================================
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   // JSON value
+  category  String   // "ai", "notification", "general"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// Activity & Audit
+// ============================================
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  action      String   // "repo_added", "doc_generated", "radar_updated", etc.
+  entityType  String   // "repository", "document", "technology", etc.
+  entityId    String?
+  details     String?  // JSON details
+  userId      String?
+  createdAt   DateTime @default(now())
+}
+
+// ============================================
+// C4 Model Components
+// ============================================
+
+model C4Component {
+  id             String   @id @default(cuid())
+  repositoryId   String
+  name           String
+  type           String   // "person", "system", "container", "component"
+  level          Int      // 1=Context, 2=Container, 3=Component
+  description    String?
+  technology     String?  // Technologies used
+  relationships  String?  // JSON array of relationships
+  parent         String?  // Parent component ID
+  position       String?  // Position for diagram
+  metadata       String?  // JSON additional data
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ============================================
+// Context Mapping (DDD)
+// ============================================
+
+model BoundedContext {
+  id             String   @id @default(cuid())
+  repositoryId   String
+  name           String
+  description    String?
+  domainType     String?  // "core", "supporting", "generic"
+  relationships  String?  // JSON array of relationships with other contexts
+  metadata       String?  // JSON additional data
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  @@unique([repositoryId, name])
+}

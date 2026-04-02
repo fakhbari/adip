@@ -1,0 +1,12 @@
+{
+  "name": "analysis-websocket-service",
+  "version": "1.0.0",
+  "description": "WebSocket service for analysis notifications",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  },
+  "dependencies": {
+    "socket.io": "^4.7.2"
+  }
+}

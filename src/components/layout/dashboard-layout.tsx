@@ -1,6 +1,8 @@
 "use client";
 
 import { ReactNode, useState, useEffect } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   GitBranch,
@@ -33,59 +35,59 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
-type ViewType = "dashboard" | "repositories" | "radar" | "adr" | "c4" | "openapi" | "context-map" | "settings";
+// Phase 8: switched from a callback-driven `activeView` to App Router
+// subroutes. Each nav item is now an `<href>` and active state derives from
+// `usePathname()`, so refresh keeps you on the tab and URLs are bookmarkable.
 
 interface DashboardLayoutProps {
   children: ReactNode;
-  activeView: string;
-  onViewChange: (view: ViewType) => void;
 }
 
 const navigation = [
   {
-    id: "dashboard",
+    href: "/dashboard",
     name: "Dashboard",
     icon: LayoutDashboard,
     description: "Overview & Statistics",
   },
   {
-    id: "repositories",
+    href: "/repositories",
     name: "Repositories",
     icon: GitBranch,
     description: "Manage repositories",
   },
   {
-    id: "radar",
+    href: "/radar",
     name: "Tech Radar",
     icon: Radar,
     description: "Technology radar",
   },
   {
-    id: "adr",
+    href: "/adr",
     name: "ADR",
     icon: FileText,
     description: "Architecture Decisions",
   },
   {
-    id: "c4",
+    href: "/c4",
     name: "C4 Docs",
     icon: Box,
     description: "C4 Documentation",
   },
   {
-    id: "openapi",
+    href: "/openapi",
     name: "OpenAPI",
     icon: FileCode,
     description: "API Specifications",
   },
   {
-    id: "context-map",
+    href: "/context-map",
     name: "Context Map",
     icon: Network,
     description: "DDD Bounded Contexts",
   },
   {
-    id: "settings",
+    href: "/settings",
     name: "Settings",
     icon: Settings,
     description: "System configuration",
@@ -93,15 +95,14 @@ const navigation = [
 ];
 
 interface SidebarContentProps {
-  activeView: string;
-  onViewChange: (view: ViewType) => void;
+  pathname: string;
   onClose?: () => void;
   lastSync: Date | null;
   isSyncing: boolean;
   onSync: () => void;
 }
 
-function SidebarContent({ activeView, onViewChange, onClose, lastSync, isSyncing, onSync }: SidebarContentProps) {
+function SidebarContent({ pathname, onClose, lastSync, isSyncing, onSync }: SidebarContentProps) {
   return (
     <div className="flex h-full flex-col">
       {/* Logo */}
@@ -118,14 +119,12 @@ function SidebarContent({ activeView, onViewChange, onClose, lastSync, isSyncing
       {/* Navigation */}
       <nav className="flex-1 space-y-1 px-3 py-4 overflow-y-auto">
         {navigation.map((item) => {
-          const isActive = activeView === item.id;
+          const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
           return (
-            <button
-              key={item.id}
-              onClick={() => {
-                onViewChange(item.id as ViewType);
-                onClose?.();
-              }}
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onClose}
               className={cn(
                 "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all hover:bg-accent",
                 isActive
@@ -138,7 +137,7 @@ function SidebarContent({ activeView, onViewChange, onClose, lastSync, isSyncing
                 <span>{item.name}</span>
                 <span className="text-xs text-muted-foreground">{item.description}</span>
               </div>
-            </button>
+            </Link>
           );
         })}
       </nav>
@@ -169,7 +168,8 @@ function SidebarContent({ activeView, onViewChange, onClose, lastSync, isSyncing
   );
 }
 
-export function DashboardLayout({ children, activeView, onViewChange }: DashboardLayoutProps) {
+export function DashboardLayout({ children }: DashboardLayoutProps) {
+  const pathname = usePathname() ?? "/";
   const [mobileOpen, setMobileOpen] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -193,8 +193,7 @@ export function DashboardLayout({ children, activeView, onViewChange }: Dashboar
       {/* Desktop Sidebar */}
       <aside className="hidden w-64 border-r bg-card lg:block">
         <SidebarContent
-          activeView={activeView}
-          onViewChange={onViewChange}
+          pathname={pathname}
           lastSync={lastSync}
           isSyncing={isSyncing}
           onSync={handleSync}
@@ -205,8 +204,7 @@ export function DashboardLayout({ children, activeView, onViewChange }: Dashboar
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-64 p-0">
           <SidebarContent
-            activeView={activeView}
-            onViewChange={onViewChange}
+            pathname={pathname}
             onClose={() => setMobileOpen(false)}
             lastSync={lastSync}
             isSyncing={isSyncing}

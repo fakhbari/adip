@@ -33,6 +33,20 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# SQLite database files (never commit — may contain secrets / PII)
+db/*.db
+db/*.db-journal
+db/*.db-wal
+db/*.db-shm
+prisma/db/*.db
+prisma/db/*.db-journal
+prisma/db/*.db-wal
+prisma/db/*.db-shm
+
+# Bootstrap runtime artifacts
+logs/
+run/
+
 # vercel
 .vercel
 

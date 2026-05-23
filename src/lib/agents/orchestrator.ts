@@ -2,7 +2,49 @@
 
 import { db } from "@/lib/db";
 import { createVCSClient, parseRepositoryUrl, FILE_PATTERNS, VCSClient, VCSFile } from "@/lib/vcs";
-import { BaseAgent, createAgentConfig } from "./base-agent";
+import { decryptOptional } from "@/lib/crypto";
+import { parseLanguages } from "@/lib/repo-fields";
+import type { DocumentType, Prisma } from "@prisma/client";
+
+// Prisma transaction client type — the subset of `db` available inside
+// `db.$transaction(async (tx) => …)`.
+type PrismaTx = Omit<Prisma.TransactionClient, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">;
+
+// Save-time payload shapes. Loosely typed because each agent returns its own
+// data shape; the orchestrator just needs the fields it persists. Tightening
+// these is Phase 5 follow-up.
+type TechRadarSavePayload = {
+  technologies?: Array<{
+    name: string;
+    category?: string;
+    description?: string;
+    version?: string;
+    sourceFile?: string;
+    quadrant: string;
+    ring: string;
+  }>;
+  languages?: string[];
+  frameworks?: string[];
+};
+
+type C4SavePayload = { level1?: unknown; level2?: unknown };
+
+type ADRSavePayload = {
+  existingADRs?: Array<{
+    number: number;
+    title: string;
+    status: string;
+    context?: string;
+    decision?: string;
+    consequences?: string;
+    alternatives?: string;
+    relatedCommits?: unknown;
+  }>;
+  suggestedADRs?: unknown[];
+};
+
+type OpenAPISavePayload = { openapiSpec?: string; endpoints?: unknown[] };
+import { BaseAgent } from "./base-agent";
 import { 
   AgentType, 
   AgentResult, 
@@ -40,7 +82,12 @@ export class AgentOrchestrator {
   private vcsClient: VCSClient | null = null;
   private repository: RepositoryContext | null = null;
   private startTime: number = 0;
-  private wsPort: number = 3003;  // WebSocket service port
+
+  // VCS coordinates resolved during initializeVCSClient. Previously these were
+  // stashed via `(this as any)._vcsOwner` — typed properties so the compiler
+  // catches the null-check before fetchAnalysisFiles uses them.
+  private vcsOwner: string | null = null;
+  private vcsRepo: string | null = null;
 
   // Progress callback
   private onProgress?: (message: WSProgressMessage) => void;
@@ -81,16 +128,14 @@ export class AgentOrchestrator {
       .map((type) => {
         const AgentClass = agentConstructors[type];
         if (!AgentClass) return null;
-        
-        const agent = new AgentClass();
-        return agent;
+        return new AgentClass();
       })
       .filter((agent): agent is BaseAgent => agent !== null)
-      .sort((a, b) => {
-        const configA = createAgentConfig(a["config"]?.type || "tech-radar");
-        const configB = createAgentConfig(b["config"]?.type || "tech-radar");
-        return configA.priority - configB.priority;
-      });
+      // Previously sorted by reading the protected `config` field via the
+      // index signature (a["config"]?.type) and re-constructing a config to
+      // get its priority — fragile under minification and broke encapsulation.
+      // BaseAgent now exposes `getPriority()` directly.
+      .sort((a, b) => a.getPriority() - b.getPriority());
   }
 
   // Send progress update
@@ -104,10 +149,37 @@ export class AgentOrchestrator {
     }
   }
 
+  // Heartbeat — keeps `AnalysisRun.lastHeartbeatAt` fresh so the janitor
+  // (src/lib/janitor.ts) doesn't flip an in-flight run to FAILED.
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  private startHeartbeat() {
+    const tick = async () => {
+      try {
+        await db.analysisRun.update({
+          where: { id: this.config.analysisRunId },
+          data: { lastHeartbeatAt: new Date() },
+        });
+      } catch (err) {
+        console.warn("orchestrator heartbeat failed:", err);
+      }
+    };
+    void tick();
+    this.heartbeatTimer = setInterval(tick, 10_000);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+  }
+
   // Main execution method
   async execute(): Promise<AgentResult[]> {
     this.startTime = Date.now();
     this.results = [];
+    this.startHeartbeat();
 
     try {
       // Step 1: Load repository context
@@ -176,7 +248,7 @@ export class AgentOrchestrator {
           agentType: result.agentType,
           status: "running",
           progress: Math.round(currentProgress),
-          message: `Completed ${agent["config"]?.name || "agent"}`,
+          message: `Completed ${agent.getName()}`,
           timestamp: new Date(),
         });
       }
@@ -228,6 +300,8 @@ export class AgentOrchestrator {
       }
 
       throw error;
+    } finally {
+      this.stopHeartbeat();
     }
   }
 
@@ -268,14 +342,12 @@ export class AgentOrchestrator {
       lastCommitHash: repo.lastCommitHash,
       repositoryPath: repo.repositoryPath,
       repositoryUrl: repo.repositoryUrl,
-      connection: repo.connection ? {
-        id: repo.connection.id,
-        name: repo.connection.name,
-        type: repo.connection.type as any,
-        url: repo.connection.url,
-        accessToken: repo.connection.accessToken,
-        username: repo.connection.username,
-      } : null,
+      // Preserve the full Prisma row (matches RepositoryContext's typing) but
+      // decrypt the token at the boundary. Stored as v1:… (Phase 2); legacy
+      // plaintext rows pass through with a console.warn until the migration runs.
+      connection: repo.connection
+        ? { ...repo.connection, accessToken: decryptOptional(repo.connection.accessToken) }
+        : null,
       aiProvider,
     };
   }
@@ -332,7 +404,7 @@ export class AgentOrchestrator {
       throw new Error("Cannot determine VCS type for repository");
     }
 
-    // Create VCS client
+    // Create VCS client. accessToken is already decrypted in loadRepositoryContext.
     if (this.repository?.connection) {
       this.vcsClient = createVCSClient({
         id: this.repository.connection.id,
@@ -348,9 +420,10 @@ export class AgentOrchestrator {
       this.vcsClient = createPublicVCSClient(vcsType);
     }
 
-    // Store owner/repo for later use
-    (this as any)._vcsOwner = owner;
-    (this as any)._vcsRepo = repo;
+    // Store for later use by fetchAnalysisFiles. Typed private fields so
+    // downstream null-checks aren't optional.
+    this.vcsOwner = owner;
+    this.vcsRepo = repo;
   }
 
   // Fetch files for analysis
@@ -358,9 +431,12 @@ export class AgentOrchestrator {
     if (!this.vcsClient) {
       throw new Error("VCS client not initialized");
     }
+    if (!this.vcsOwner || !this.vcsRepo) {
+      throw new Error("VCS owner/repo not resolved (call initializeVCSClient first)");
+    }
 
-    const owner = (this as any)._vcsOwner;
-    const repo = (this as any)._vcsRepo;
+    const owner = this.vcsOwner;
+    const repo = this.vcsRepo;
     const branch = this.repository?.defaultBranch || "main";
 
     // Get full file tree
@@ -454,48 +530,107 @@ export class AgentOrchestrator {
     return result.slice(0, maxCount);
   }
 
-  // Save results to database
+  // Save results to database.
+  //
+  // Phase 6: previously each agent's save method ran its own awaits, then a
+  // separate `db.repository.update` at the bottom set `lastAnalyzedAt`. A
+  // partial failure (network blip mid-loop) left an inconsistent state. We
+  // now wrap the whole post-analysis write in a single transaction; SQLite
+  // serialises writers anyway, but the atomicity guarantee matters.
+  //
+  // The repository row was being updated 2-3 times (languages, frameworks,
+  // lastAnalyzedAt) — merged into one update at the end.
   private async saveResults(): Promise<void> {
-    for (const result of this.results) {
-      if (result.status !== "success" || !result.data) continue;
+    const techRadar = this.results.find((r) => r.agentType === "tech-radar");
+    const techRadarData = techRadar?.status === "success" ? (techRadar.data as TechRadarSavePayload | undefined) : undefined;
 
-      switch (result.agentType) {
-        case "tech-radar":
-          await this.saveTechRadarResults(result.data as any);
-          break;
-        case "c4":
-          await this.saveC4Results(result.data as any);
-          break;
-        case "adr":
-          await this.saveADRResults(result.data as any);
-          break;
-        case "openapi":
-          await this.saveOpenAPIResults(result.data as any);
-          break;
+    await db.$transaction(async (tx) => {
+      for (const result of this.results) {
+        if (result.status !== "success" || !result.data) continue;
+        switch (result.agentType) {
+          case "tech-radar":
+            await this.saveTechRadarResults(tx, result.data as TechRadarSavePayload);
+            break;
+          case "c4":
+            await this.saveC4Results(tx, result.data as C4SavePayload);
+            break;
+          case "adr":
+            await this.saveADRResults(tx, result.data as ADRSavePayload);
+            break;
+          case "openapi":
+            await this.saveOpenAPIResults(tx, result.data as OpenAPISavePayload);
+            break;
+        }
       }
-    }
 
-    // Update repository last analyzed time
-    await db.repository.update({
-      where: { id: this.config.repositoryId },
-      data: { lastAnalyzedAt: new Date() },
+      // Single repository update at the end folding in languages, frameworks,
+      // and lastAnalyzedAt. Languages are merged with whatever the row already
+      // had so we don't lose previously-detected entries.
+      const mergedLanguages = techRadarData?.languages?.length
+        ? [...new Set([...parseLanguages({ languages: this.repository?.languages ?? null }), ...techRadarData.languages])]
+        : null;
+      const frameworks = techRadarData?.frameworks?.length ? techRadarData.frameworks : null;
+
+      await tx.repository.update({
+        where: { id: this.config.repositoryId },
+        data: {
+          lastAnalyzedAt: new Date(),
+          ...(mergedLanguages ? { languages: JSON.stringify(mergedLanguages) } : {}),
+          ...(frameworks ? { frameworks: JSON.stringify(frameworks) } : {}),
+        },
+      });
+    });
+  }
+
+  // Create a new `Document` row at the next available `version` for the
+  // (repositoryId, type) pair. Phase 6 replaces the previous upsert which
+  // overwrote prior versions; analysis history is now append-only.
+  private async appendDocumentVersion(
+    tx: PrismaTx,
+    args: { type: DocumentType; title: string; content: string; generatedBy: string }
+  ): Promise<void> {
+    const latest = await tx.document.findFirst({
+      where: { repositoryId: this.config.repositoryId, type: args.type },
+      orderBy: { version: "desc" },
+      select: { version: true },
+    });
+    const nextVersion = (latest?.version ?? 0) + 1;
+    await tx.document.create({
+      data: {
+        repositoryId: this.config.repositoryId,
+        type: args.type,
+        status: "COMPLETED",
+        title: args.title,
+        content: args.content,
+        version: nextVersion,
+        generatedAt: new Date(),
+        generatedBy: args.generatedBy,
+      },
     });
   }
 
   // Save Tech Radar results
-  private async saveTechRadarResults(data: any): Promise<void> {
-    const techRadarData = data as { technologies: any[]; languages: string[]; frameworks: string[] };
-    
-    if (!techRadarData.technologies) return;
+  private async saveTechRadarResults(tx: PrismaTx, data: TechRadarSavePayload): Promise<void> {
+    if (!data.technologies) return;
 
-    for (const tech of techRadarData.technologies) {
-      // Find or create technology
-      let technology = await db.technology.findUnique({
-        where: { name: tech.name },
-      });
+    const quadrantMap: Record<string, "TECHNIQUES" | "TOOLS" | "PLATFORMS" | "LANGUAGES_FRAMEWORKS"> = {
+      techniques: "TECHNIQUES",
+      tools: "TOOLS",
+      platforms: "PLATFORMS",
+      "languages-frameworks": "LANGUAGES_FRAMEWORKS",
+    };
 
+    const ringMap: Record<string, "ADOPT" | "TRIAL" | "ASSESS" | "HOLD"> = {
+      adopt: "ADOPT",
+      trial: "TRIAL",
+      assess: "ASSESS",
+      hold: "HOLD",
+    };
+
+    for (const tech of data.technologies) {
+      let technology = await tx.technology.findUnique({ where: { name: tech.name } });
       if (!technology) {
-        technology = await db.technology.create({
+        technology = await tx.technology.create({
           data: {
             name: tech.name,
             category: tech.category || "Unknown",
@@ -504,8 +639,7 @@ export class AgentOrchestrator {
         });
       }
 
-      // Create technology usage
-      await db.technologyUsage.upsert({
+      await tx.technologyUsage.upsert({
         where: {
           repositoryId_technologyId: {
             repositoryId: this.config.repositoryId,
@@ -524,22 +658,7 @@ export class AgentOrchestrator {
         },
       });
 
-      // Create/update radar item
-      const quadrantMap: Record<string, any> = {
-        techniques: "TECHNIQUES",
-        tools: "TOOLS",
-        platforms: "PLATFORMS",
-        "languages-frameworks": "LANGUAGES_FRAMEWORKS",
-      };
-
-      const ringMap: Record<string, any> = {
-        adopt: "ADOPT",
-        trial: "TRIAL",
-        assess: "ASSESS",
-        hold: "HOLD",
-      };
-
-      await db.radarItem.upsert({
+      await tx.radarItem.upsert({
         where: {
           technologyId_quadrant: {
             technologyId: technology.id,
@@ -559,96 +678,37 @@ export class AgentOrchestrator {
         },
       });
     }
-
-    // Update repository languages
-    if (techRadarData.languages?.length > 0) {
-      const existingLanguages = this.repository?.languages 
-        ? JSON.parse(this.repository.languages) 
-        : [];
-      const allLanguages = [...new Set([...existingLanguages, ...techRadarData.languages])];
-      
-      await db.repository.update({
-        where: { id: this.config.repositoryId },
-        data: { languages: JSON.stringify(allLanguages) },
-      });
-    }
-
-    // Update repository frameworks
-    if (techRadarData.frameworks?.length > 0) {
-      await db.repository.update({
-        where: { id: this.config.repositoryId },
-        data: { frameworks: JSON.stringify(techRadarData.frameworks) },
-      });
-    }
+    // languages/frameworks are merged into the single repository update at
+    // the end of saveResults (Phase 6).
   }
 
   // Save C4 results
-  private async saveC4Results(data: any): Promise<void> {
-    const c4Data = data as { level1: any; level2: any };
+  private async saveC4Results(tx: PrismaTx, c4Data: C4SavePayload): Promise<void> {
     const repoName = this.repository?.name || "Repository";
 
-    // Save Level 1 - Context
     if (c4Data.level1) {
-      await db.document.upsert({
-        where: {
-          repositoryId_type: {
-            repositoryId: this.config.repositoryId,
-            type: "C4_CONTEXT",
-          },
-        },
-        create: {
-          repositoryId: this.config.repositoryId,
-          type: "C4_CONTEXT",
-          status: "COMPLETED",
-          title: `${repoName} - System Context`,
-          content: JSON.stringify(c4Data.level1, null, 2),
-          generatedAt: new Date(),
-          generatedBy: "c4-agent",
-        },
-        update: {
-          status: "COMPLETED",
-          content: JSON.stringify(c4Data.level1, null, 2),
-          generatedAt: new Date(),
-          generatedBy: "c4-agent",
-        },
+      await this.appendDocumentVersion(tx, {
+        type: "C4_CONTEXT",
+        title: `${repoName} - System Context`,
+        content: JSON.stringify(c4Data.level1, null, 2),
+        generatedBy: "c4-agent",
       });
     }
-
-    // Save Level 2 - Containers
     if (c4Data.level2) {
-      await db.document.upsert({
-        where: {
-          repositoryId_type: {
-            repositoryId: this.config.repositoryId,
-            type: "C4_CONTAINER",
-          },
-        },
-        create: {
-          repositoryId: this.config.repositoryId,
-          type: "C4_CONTAINER",
-          status: "COMPLETED",
-          title: `${repoName} - Containers`,
-          content: JSON.stringify(c4Data.level2, null, 2),
-          generatedAt: new Date(),
-          generatedBy: "c4-agent",
-        },
-        update: {
-          status: "COMPLETED",
-          content: JSON.stringify(c4Data.level2, null, 2),
-          generatedAt: new Date(),
-          generatedBy: "c4-agent",
-        },
+      await this.appendDocumentVersion(tx, {
+        type: "C4_CONTAINER",
+        title: `${repoName} - Containers`,
+        content: JSON.stringify(c4Data.level2, null, 2),
+        generatedBy: "c4-agent",
       });
     }
   }
 
   // Save ADR results
-  private async saveADRResults(data: any): Promise<void> {
-    const adrData = data as { existingADRs: any[]; suggestedADRs: any[] };
-
+  private async saveADRResults(tx: PrismaTx, adrData: ADRSavePayload): Promise<void> {
     if (!adrData.existingADRs) return;
 
-    const statusMap: Record<string, any> = {
+    const statusMap: Record<string, "PROPOSED" | "ACCEPTED" | "DEPRECATED" | "SUPERSEDED" | "REJECTED"> = {
       proposed: "PROPOSED",
       accepted: "ACCEPTED",
       deprecated: "DEPRECATED",
@@ -657,7 +717,7 @@ export class AgentOrchestrator {
     };
 
     for (const adr of adrData.existingADRs) {
-      await db.aDR.upsert({
+      await tx.aDR.upsert({
         where: {
           repositoryId_number: {
             repositoryId: this.config.repositoryId,
@@ -688,33 +748,15 @@ export class AgentOrchestrator {
   }
 
   // Save OpenAPI results
-  private async saveOpenAPIResults(data: any): Promise<void> {
-    const openApiData = data as { openapiSpec?: string; endpoints: any[] };
+  private async saveOpenAPIResults(tx: PrismaTx, openApiData: OpenAPISavePayload): Promise<void> {
     const repoName = this.repository?.name || "Repository";
 
     if (openApiData.openapiSpec) {
-      await db.document.upsert({
-        where: {
-          repositoryId_type: {
-            repositoryId: this.config.repositoryId,
-            type: "OPENAPI",
-          },
-        },
-        create: {
-          repositoryId: this.config.repositoryId,
-          type: "OPENAPI",
-          status: "COMPLETED",
-          title: `${repoName} - API Specification`,
-          content: openApiData.openapiSpec,
-          generatedAt: new Date(),
-          generatedBy: "openapi-agent",
-        },
-        update: {
-          status: "COMPLETED",
-          content: openApiData.openapiSpec,
-          generatedAt: new Date(),
-          generatedBy: "openapi-agent",
-        },
+      await this.appendDocumentVersion(tx, {
+        type: "OPENAPI",
+        title: `${repoName} - API Specification`,
+        content: openApiData.openapiSpec,
+        generatedBy: "openapi-agent",
       });
     }
   }
@@ -735,49 +777,131 @@ export class AgentOrchestrator {
 }
 
 // ============================================
-// Run Analysis Helper
+// Run Analysis Helper — single entry point for starting an analysis.
+//
+// Phase 7: previously POST /api/repositories/[id]/analysis re-implemented
+// this logic inline (duplicate paths → divergence risk). The route now
+// delegates here. We also fix the TOCTOU race where two concurrent POSTs
+// could create two RUNNING rows: the "is anyone running?" check + create
+// happen inside one `db.$transaction`, so SQLite's BEGIN IMMEDIATE
+// serialises writers and the second caller sees the first row.
 // ============================================
 
+export class AnalysisAlreadyRunningError extends Error {
+  constructor(public readonly existingRunId: string) {
+    super("An analysis is already running for this repository");
+    this.name = "AnalysisAlreadyRunningError";
+  }
+}
+
+// Hard wall-clock ceiling for a single analysis. Past this we mark the run
+// FAILED and emit a WS error so the UI can recover.
+const HARD_WALL_CLOCK_MS = 15 * 60 * 1000;
+
+export type RunAnalysisOptions = {
+  repositoryId: string;
+  triggeredBy?: "manual" | "scheduler" | "webhook";
+  enabledAgents?: AgentType[];
+  onProgress?: (msg: WSProgressMessage) => void;
+  onComplete?: (msg: WSAnalysisCompleteMessage) => void;
+};
+
 export async function runAnalysis(
-  repositoryId: string,
-  triggeredBy: "manual" | "scheduler" | "webhook" = "manual",
-  enabledAgents?: AgentType[]
+  opts: RunAnalysisOptions
 ): Promise<{ analysisRunId: string }> {
-  // Create analysis run record
-  const analysisRun = await db.analysisRun.create({
-    data: {
-      repositoryId,
-      triggeredBy,
-      status: "QUEUED",
-    },
+  const { repositoryId, triggeredBy = "manual", enabledAgents, onProgress, onComplete } = opts;
+
+  // Transactional create — serialises with any concurrent caller on SQLite.
+  const analysisRun = await db.$transaction(async (tx) => {
+    const running = await tx.analysisRun.findFirst({
+      where: { repositoryId, status: { in: ["QUEUED", "RUNNING"] } },
+    });
+    if (running) throw new AnalysisAlreadyRunningError(running.id);
+
+    return tx.analysisRun.create({
+      data: {
+        repositoryId,
+        triggeredBy,
+        status: "RUNNING",
+        startedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
+    });
   });
 
-  // Create orchestrator
   const orchestrator = new AgentOrchestrator({
     analysisRunId: analysisRun.id,
     repositoryId,
     triggeredBy,
     enabledAgents,
   });
+  if (onProgress || onComplete) {
+    orchestrator.setCallbacks(
+      onProgress ?? (() => {}),
+      onComplete ?? (() => {})
+    );
+  }
 
-  // Update status to running
-  await db.analysisRun.update({
-    where: { id: analysisRun.id },
-    data: { status: "RUNNING", startedAt: new Date() },
+  // Hard wall-clock guard runs in parallel with execute(); whichever resolves
+  // first wins. The guard marks the row FAILED and emits onComplete so the
+  // UI doesn't hang waiting for a progress event that will never come.
+  const wallClock = new Promise<void>((resolve) => {
+    setTimeout(async () => {
+      try {
+        const row = await db.analysisRun.findUnique({
+          where: { id: analysisRun.id },
+          select: { status: true },
+        });
+        if (row && (row.status === "RUNNING" || row.status === "QUEUED")) {
+          await db.analysisRun.update({
+            where: { id: analysisRun.id },
+            data: {
+              status: "FAILED",
+              completedAt: new Date(),
+              errors: JSON.stringify([`Hard timeout after ${HARD_WALL_CLOCK_MS / 1000}s`]),
+            },
+          });
+          onComplete?.({
+            analysisRunId: analysisRun.id,
+            repositoryId,
+            status: "failed",
+            results: [],
+            duration: HARD_WALL_CLOCK_MS,
+            documentsGenerated: 0,
+          });
+        }
+      } catch (err) {
+        console.warn("wall-clock guard error:", err);
+      }
+      resolve();
+    }, HARD_WALL_CLOCK_MS);
   });
 
-  // Run analysis (async - don't await)
-  orchestrator.execute().catch(async (error) => {
-    console.error("Analysis failed:", error);
-    await db.analysisRun.update({
-      where: { id: analysisRun.id },
-      data: {
-        status: "FAILED",
-        completedAt: new Date(),
-        errors: JSON.stringify([error.message]),
-      },
-    });
-  });
+  // Fire-and-forget. The wallClock guard + orchestrator's own try/finally
+  // handle every error path; this race only ensures one of them wins.
+  void Promise.race([
+    orchestrator.execute().catch(async (error: unknown) => {
+      console.error("Analysis failed:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      await db.analysisRun.update({
+        where: { id: analysisRun.id },
+        data: {
+          status: "FAILED",
+          completedAt: new Date(),
+          errors: JSON.stringify([message]),
+        },
+      });
+      onComplete?.({
+        analysisRunId: analysisRun.id,
+        repositoryId,
+        status: "failed",
+        results: [],
+        duration: 0,
+        documentsGenerated: 0,
+      });
+    }),
+    wallClock,
+  ]);
 
   return { analysisRunId: analysisRun.id };
 }

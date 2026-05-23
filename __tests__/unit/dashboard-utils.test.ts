@@ -1,5 +1,5 @@
-import { describe, it, expect } from "bun:test";
-import { getTimeAgo, generateTrendData } from "../src/lib/dashboard-utils";
+import { describe, it, expect } from "vitest";
+import { getTimeAgo, generateTrendData } from "../../src/lib/dashboard-utils";
 
 describe("Dashboard Utilities", () => {
   describe("getTimeAgo", () => {

@@ -2,15 +2,13 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  /* config options here */
+  // Surface TypeScript errors at build time. Previously `true`, which masked
+  // real type bugs (e.g. unimported FileInfo, schema field-name mismatches).
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
-  reactStrictMode: false,
-  // Force clear cache
-  experimental: {
-    // Enable webpack for dev mode to avoid Turbopack issues
-  },
+  // Strict Mode catches effect / lifecycle bugs in development by double-mounting.
+  reactStrictMode: true,
 };
 
 export default nextConfig;

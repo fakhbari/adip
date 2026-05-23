@@ -176,10 +176,15 @@ export class TechRadarAgent extends BaseAgent {
         FILE_PATTERNS.dependencyFiles.some(pattern => pattern.test(path))
       );
 
-    // Process each dependency file
-    for (const [path, content] of depFiles) {
+    // Process each dependency file.
+    // Previously this used `depFiles.indexOf([path, content])` to compute
+    // progress — but `indexOf` on a freshly-constructed tuple always returns
+    // -1 (array identity comparison), so the progress bar reported negative
+    // / nonsensical values. Track the index explicitly.
+    for (let i = 0; i < depFiles.length; i++) {
+      const [path, content] = depFiles[i];
       this.updateProgress(
-        20 + (depFiles.indexOf([path, content]) / depFiles.length) * 40,
+        20 + (i / Math.max(depFiles.length, 1)) * 40,
         `Analyzing ${path}...`
       );
 
@@ -491,16 +496,36 @@ export class TechRadarAgent extends BaseAgent {
     return technologies;
   }
 
-  // Get technology info from our mapping
+  // Get technology info from our mapping.
+  //
+  // Previously this matched both directions via `includes()`, which produced
+  // a flood of false positives ("pg" matched "typescript", "react" matched
+  // "react-native", "next" matched "next-auth").
+  //
+  // The replacement is strict — exact match only — with one explicit
+  // exception for scoped npm packages: a name like "@aws-sdk/client-s3"
+  // should still match the "@aws-sdk" entry in the table.
   private getTechInfo(name: string): { category: string; quadrant: "techniques" | "tools" | "platforms" | "languages-frameworks" } | null {
-    const normalizedName = name.toLowerCase().replace(/^@[^/]+\//, "");
-    
-    for (const [key, value] of Object.entries(TECHNOLOGY_CATEGORIES)) {
-      if (normalizedName.includes(key.toLowerCase()) || key.toLowerCase().includes(normalizedName)) {
-        return value;
+    const lower = name.toLowerCase();
+    const normalized = lower.replace(/^@[^/]+\//, "");
+
+    // 1. Exact match on the normalized form (covers `react`, `next`, etc).
+    const byNormalized = TECHNOLOGY_CATEGORIES[normalized as keyof typeof TECHNOLOGY_CATEGORIES];
+    if (byNormalized) return byNormalized;
+
+    // 2. Exact match on the original form (covers `next-auth`, `react-native`
+    //    when they appear as keys in the table — keeps them distinct from
+    //    `next` / `react`).
+    const byLower = TECHNOLOGY_CATEGORIES[lower as keyof typeof TECHNOLOGY_CATEGORIES];
+    if (byLower) return byLower;
+
+    // 3. Scoped-package prefix: "@scope/foo" against an "@scope" key.
+    for (const key of Object.keys(TECHNOLOGY_CATEGORIES)) {
+      if (key.startsWith("@") && lower.startsWith(key + "/")) {
+        return TECHNOLOGY_CATEGORIES[key as keyof typeof TECHNOLOGY_CATEGORIES];
       }
     }
-    
+
     return null;
   }
 
@@ -521,16 +546,18 @@ export class TechRadarAgent extends BaseAgent {
     return version.replace(/^[\^~>=<]+/, "").split(" ")[0];
   }
 
-  // Determine radar ring based on technology maturity and usage
+  // Determine radar ring based on technology maturity and usage.
+  //
+  // Same false-positive problem as getTechInfo — substring `includes()`
+  // matched "react-native" → "react" → adopt, "next-auth" → "next" → adopt.
+  // Use the same exact-or-separator-prefix scheme.
   private determineRadarRing(tech: DetectedTechnology): "adopt" | "trial" | "assess" | "hold" {
-    // Known mature technologies
     const adoptTechnologies = [
       "react", "vue", "express", "django", "postgresql", "redis",
       "docker", "jest", "webpack", "tailwindcss", "typescript",
       "next", "prisma", "axios", "zod", "pino", "winston",
     ];
 
-    // Technologies to try
     const trialTechnologies = [
       "svelte", "fastify", "nestjs", "vite", "playwright", "vitest",
       "drizzle", "bull", "kafkajs", "zustand", "pinia",
@@ -542,17 +569,14 @@ export class TechRadarAgent extends BaseAgent {
     ];
 
     const nameLower = tech.name.toLowerCase();
+    // Strict exact match — same reasoning as getTechInfo. Variants like
+    // "next-auth" or "react-native" get their own entries (or fall through
+    // to "assess") rather than being silently bucketed with `next` / `react`.
+    const matches = (list: string[]) => list.some((t) => nameLower === t);
 
-    if (adoptTechnologies.some(t => nameLower.includes(t))) {
-      return "adopt";
-    }
-    if (trialTechnologies.some(t => nameLower.includes(t))) {
-      return "trial";
-    }
-    if (holdTechnologies.some(t => nameLower.includes(t))) {
-      return "hold";
-    }
-
+    if (matches(holdTechnologies)) return "hold";
+    if (matches(adoptTechnologies)) return "adopt";
+    if (matches(trialTechnologies)) return "trial";
     return "assess";
   }
 }

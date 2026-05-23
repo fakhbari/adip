@@ -1,12 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { encryptOptional } from "@/lib/crypto";
+
+// Shape we return for a connection. Note: accessToken is never returned;
+// callers get a boolean indicator instead.
+type ConnectionDTO = {
+  id: string;
+  name: string;
+  type: string;
+  url: string;
+  username: string | null;
+  isActive: boolean;
+  lastSync: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  hasAccessToken: boolean;
+};
+
+function toDTO(c: {
+  id: string;
+  name: string;
+  type: string;
+  url: string;
+  username: string | null;
+  accessToken: string | null;
+  isActive: boolean;
+  lastSync: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): ConnectionDTO {
+  return {
+    id: c.id,
+    name: c.name,
+    type: c.type,
+    url: c.url,
+    username: c.username,
+    isActive: c.isActive,
+    lastSync: c.lastSync,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+    hasAccessToken: c.accessToken !== null && c.accessToken !== "",
+  };
+}
 
 export async function GET() {
   try {
     const connections = await db.repositoryConnection.findMany({
       orderBy: { createdAt: "desc" },
     });
-    return NextResponse.json(connections);
+    return NextResponse.json(connections.map(toDTO));
   } catch (error) {
     console.error("Error fetching connections:", error);
     return NextResponse.json({ error: "Failed to fetch connections" }, { status: 500 });
@@ -16,7 +58,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, type, url, accessToken } = body;
+    const { name, type, url, accessToken, username } = body;
 
     if (!name || !type || !url) {
       return NextResponse.json(
@@ -25,18 +67,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create connection in database
+    // Encrypt accessToken before persisting (Phase 2). encryptOptional is a
+    // no-op for empty/null, and idempotent for already-encrypted blobs.
+    const encryptedToken = encryptOptional(accessToken);
+
     const connection = await db.repositoryConnection.create({
       data: {
         name,
         type: type.toLowerCase(),
         url: url.replace(/\/$/, ""), // Remove trailing slash
-        accessToken: accessToken || null,
+        accessToken: encryptedToken,
+        username: username ?? null,
         isActive: true,
       },
     });
 
-    // Log activity
     await db.activityLog.create({
       data: {
         action: "connection_created",
@@ -50,7 +95,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json(connection);
+    return NextResponse.json(toDTO(connection));
   } catch (error) {
     console.error("Error creating connection:", error);
     return NextResponse.json({ error: "Failed to create connection" }, { status: 500 });

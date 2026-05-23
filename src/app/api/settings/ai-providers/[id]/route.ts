@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { encryptOptional } from "@/lib/crypto";
 
 // GET /api/settings/ai-providers/[id] - Get single AI provider
 export async function GET(
@@ -79,7 +80,10 @@ export async function PUT(
       data: {
         name: name ?? existing.name,
         type: type ?? existing.type,
-        apiKey: apiKey !== undefined ? (apiKey || null) : existing.apiKey,
+        // undefined → keep current (already encrypted) value.
+        // empty string → clear.
+        // non-empty → encrypt and replace.
+        apiKey: apiKey !== undefined ? encryptOptional(apiKey) : existing.apiKey,
         baseUrl: baseUrl !== undefined ? (baseUrl || null) : existing.baseUrl,
         modelName: modelName ?? existing.modelName,
         maxTokens: maxTokens ?? existing.maxTokens,

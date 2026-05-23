@@ -1,5 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { encryptOptional } from "@/lib/crypto";
+
+type ConnectionDTO = {
+  id: string;
+  name: string;
+  type: string;
+  url: string;
+  username: string | null;
+  isActive: boolean;
+  lastSync: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  hasAccessToken: boolean;
+};
+
+function toDTO(c: {
+  id: string;
+  name: string;
+  type: string;
+  url: string;
+  username: string | null;
+  accessToken: string | null;
+  isActive: boolean;
+  lastSync: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): ConnectionDTO {
+  return {
+    id: c.id,
+    name: c.name,
+    type: c.type,
+    url: c.url,
+    username: c.username,
+    isActive: c.isActive,
+    lastSync: c.lastSync,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+    hasAccessToken: c.accessToken !== null && c.accessToken !== "",
+  };
+}
 
 export async function GET(
   request: NextRequest,
@@ -18,7 +58,7 @@ export async function GET(
       );
     }
 
-    return NextResponse.json(connection);
+    return NextResponse.json(toDTO(connection));
   } catch (error) {
     console.error("Error fetching connection:", error);
     return NextResponse.json(
@@ -35,9 +75,8 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, type, url, accessToken, isActive } = body;
+    const { name, type, url, accessToken, username, isActive } = body;
 
-    // Check if connection exists
     const existingConnection = await db.repositoryConnection.findUnique({
       where: { id },
     });
@@ -49,19 +88,27 @@ export async function PUT(
       );
     }
 
-    // Update connection
+    // accessToken handling:
+    //   - undefined → keep existing (encrypted) value.
+    //   - empty string → clear (set to null).
+    //   - non-empty → encrypt and replace.
+    let nextAccessToken: string | null = existingConnection.accessToken;
+    if (accessToken !== undefined) {
+      nextAccessToken = encryptOptional(accessToken);
+    }
+
     const connection = await db.repositoryConnection.update({
       where: { id },
       data: {
         name: name ?? existingConnection.name,
         type: type?.toLowerCase() ?? existingConnection.type,
         url: url ? url.replace(/\/$/, "") : existingConnection.url,
-        accessToken: accessToken !== undefined ? (accessToken || null) : existingConnection.accessToken,
+        accessToken: nextAccessToken,
+        username: username !== undefined ? (username || null) : existingConnection.username,
         isActive: isActive !== undefined ? isActive : existingConnection.isActive,
       },
     });
 
-    // Log activity
     await db.activityLog.create({
       data: {
         action: "connection_updated",
@@ -75,7 +122,7 @@ export async function PUT(
       },
     });
 
-    return NextResponse.json(connection);
+    return NextResponse.json(toDTO(connection));
   } catch (error) {
     console.error("Error updating connection:", error);
     return NextResponse.json(
@@ -92,7 +139,6 @@ export async function DELETE(
   try {
     const { id } = await params;
 
-    // Check if connection exists
     const existingConnection = await db.repositoryConnection.findUnique({
       where: { id },
     });
@@ -104,12 +150,10 @@ export async function DELETE(
       );
     }
 
-    // Delete connection (cascade will delete related repositories)
     await db.repositoryConnection.delete({
       where: { id },
     });
 
-    // Log activity
     await db.activityLog.create({
       data: {
         action: "connection_deleted",

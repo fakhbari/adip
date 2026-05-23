@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { parseLanguages, parseFrameworks } from "@/lib/repo-fields";
 
 // GET /api/repositories/[id] - Get single repository
 export async function GET(
@@ -80,12 +81,13 @@ export async function GET(
       );
     }
 
-    // Parse JSON fields
+    // Parse JSON-shaped String columns via the shared helper (validates shape,
+    // returns [] on corrupt data instead of crashing the endpoint).
     const result = {
       ...repository,
-      languages: repository.languages ? JSON.parse(repository.languages) : [],
-      frameworks: repository.frameworks ? JSON.parse(repository.frameworks) : [],
-      technologies: repository.technologies.map((t: any) => ({
+      languages: parseLanguages(repository),
+      frameworks: parseFrameworks(repository),
+      technologies: repository.technologies.map((t) => ({
         id: t.technology.id,
         name: t.technology.name,
         category: t.technology.category,

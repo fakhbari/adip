@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { encryptOptional } from "@/lib/crypto";
 
 // GET /api/settings/ai-providers - List all AI providers
 export async function GET() {
@@ -63,7 +64,8 @@ export async function POST(request: NextRequest) {
       data: {
         name,
         type,
-        apiKey: apiKey || null,
+        // Encrypt at rest (Phase 2). Idempotent for already-encrypted input.
+        apiKey: encryptOptional(apiKey),
         baseUrl: baseUrl || null,
         modelName,
         maxTokens: maxTokens || 4096,

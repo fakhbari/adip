@@ -1,7 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     // Get counts from database
     const [
@@ -34,13 +34,20 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    // Previous version had a precedence bug: `docTypeCounts["C4_CONTEXT"] || 0 + (...)`
+    // parses as `docTypeCounts["C4_CONTEXT"] || (0 + (...))`, so the sum of all
+    // three C4 sub-types was only used when C4_CONTEXT was 0/undefined. Fix
+    // with explicit parentheses + a helper.
+    const get = (key: string): number => docTypeCounts[key] || 0;
+    const repos = Math.max(totalRepositories, 1);
+    const c4Total = get("C4_CONTEXT") + get("C4_CONTAINER") + get("C4_COMPONENT");
     const coverageByType = [
-      { type: "C4 Docs", coverage: Math.round(((docTypeCounts["C4_CONTEXT"] || 0 + (docTypeCounts["C4_CONTAINER"] || 0) + (docTypeCounts["C4_COMPONENT"] || 0)) / 3 / Math.max(totalRepositories, 1)) * 100) || 76, count: (docTypeCounts["C4_CONTEXT"] || 0) + (docTypeCounts["C4_CONTAINER"] || 0) + (docTypeCounts["C4_COMPONENT"] || 0) },
-      { type: "ADRs", coverage: Math.round(((docTypeCounts["ADR"] || 0) / Math.max(totalRepositories, 1)) * 100) || 58, count: docTypeCounts["ADR"] || 0 },
-      { type: "Context Map", coverage: Math.round(((docTypeCounts["CONTEXT_MAP"] || 0) / Math.max(totalRepositories, 1)) * 100) || 40, count: docTypeCounts["CONTEXT_MAP"] || 0 },
-      { type: "OpenAPI", coverage: Math.round(((docTypeCounts["OPENAPI"] || 0) / Math.max(totalRepositories, 1)) * 100) || 89, count: docTypeCounts["OPENAPI"] || 0 },
-      { type: "AsyncAPI", coverage: Math.round(((docTypeCounts["ASYNCAPI"] || 0) / Math.max(totalRepositories, 1)) * 100) || 42, count: docTypeCounts["ASYNCAPI"] || 0 },
-      { type: "Data Catalog", coverage: Math.round(((docTypeCounts["DATA_CATALOG"] || 0) / Math.max(totalRepositories, 1)) * 100) || 31, count: docTypeCounts["DATA_CATALOG"] || 0 },
+      { type: "C4 Docs", coverage: Math.round((c4Total / 3 / repos) * 100), count: c4Total },
+      { type: "ADRs", coverage: Math.round((get("ADR") / repos) * 100), count: get("ADR") },
+      { type: "Context Map", coverage: Math.round((get("CONTEXT_MAP") / repos) * 100), count: get("CONTEXT_MAP") },
+      { type: "OpenAPI", coverage: Math.round((get("OPENAPI") / repos) * 100), count: get("OPENAPI") },
+      { type: "AsyncAPI", coverage: Math.round((get("ASYNCAPI") / repos) * 100), count: get("ASYNCAPI") },
+      { type: "Data Catalog", coverage: Math.round((get("DATA_CATALOG") / repos) * 100), count: get("DATA_CATALOG") },
     ];
 
     // Technology distribution
@@ -152,7 +159,7 @@ function getTimeAgo(date: Date): string {
 }
 
 function generateTrendData() {
-  const data = [];
+  const data: { date: string; documents: number; repositories: number }[] = [];
   for (let i = 3; i >= 0; i--) {
     data.push({
       date: `Week ${4 - i}`,

@@ -65,14 +65,34 @@ export function useAnalysisWebSocket(
   const [analysisRunId, setAnalysisRunId] = useState<string | null>(null);
   const currentRepositoryId = useRef<string | null>(null);
 
+  // Phase 8: previously the effect depended on `[onAnalysisComplete]`, which
+  // reconnected the socket on every parent render unless the caller wrapped
+  // the callback in `useCallback`. Hold the latest callback in a ref instead
+  // so the effect runs exactly once on mount.
+  const onCompleteRef = useRef(onAnalysisComplete);
+  useEffect(() => {
+    onCompleteRef.current = onAnalysisComplete;
+  }, [onAnalysisComplete]);
+
   useEffect(() => {
     // Dynamically import socket.io-client to avoid SSR issues
     const initSocket = async () => {
       try {
         const { io } = await import("socket.io-client");
-        
-        // Connect to analysis WebSocket service via gateway
-        socketRef.current = io("/?XTransformPort=3003", {
+
+        // Connect to the analysis WebSocket service.
+        //   - Dev: direct to http://localhost:3003.
+        //   - Prod: NEXT_PUBLIC_WS_URL should point to the Caddy :82 site
+        //     (or equivalent) that reverse-proxies the WS service.
+        // The previous `/?XTransformPort=3003` form relied on a Caddy block
+        // that allowed reverse-proxying to ANY localhost port (SSRF). Removed.
+        const wsUrl =
+          process.env.NEXT_PUBLIC_WS_URL ??
+          (typeof window !== "undefined" && window.location.hostname !== "localhost"
+            ? `${window.location.protocol}//${window.location.hostname}:82`
+            : "http://localhost:3003");
+
+        socketRef.current = io(wsUrl, {
           transports: ["websocket", "polling"],
           reconnection: true,
           reconnectionAttempts: 5,
@@ -121,7 +141,7 @@ export function useAnalysisWebSocket(
           currentRepositoryId.current = null;
           
           toast.success(`Analysis completed! ${data.documentsGenerated} documents generated.`);
-          onAnalysisComplete?.(data.results);
+          onCompleteRef.current?.(data.results);
         });
 
         // Handle errors
@@ -156,7 +176,8 @@ export function useAnalysisWebSocket(
         socketRef.current.disconnect();
       }
     };
-  }, [onAnalysisComplete]);
+    // Run-once: callback access happens through onCompleteRef. See note above.
+  }, []);
 
   const runAnalysis = useCallback(
     async (repositoryId: string, types?: string[], aiProviderId?: string | null) => {

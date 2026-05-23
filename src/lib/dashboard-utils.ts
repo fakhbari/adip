@@ -8,7 +8,7 @@ export function getTimeAgo(date: Date): string {
 }
 
 export function generateTrendData() {
-  const data = [];
+  const data: { date: string; documents: number; repositories: number }[] = [];
   for (let i = 3; i >= 0; i--) {
     data.push({
       date: `Week ${4 - i}`,

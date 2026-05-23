@@ -1,11 +1,12 @@
 // Base Agent Class for Multi-Agent Architecture
 
-import { 
-  AgentType, 
-  AgentStatus, 
-  AgentResult, 
-  AgentProgress, 
-  AnalysisContext 
+import {
+  AgentType,
+  AgentStatus,
+  AgentResult,
+  AgentProgress,
+  AnalysisContext,
+  FileInfo,
 } from "./types";
 
 // ============================================
@@ -38,6 +39,21 @@ export abstract class BaseAgent {
 
   constructor(config: AgentConfig) {
     this.config = config;
+  }
+
+  // Public accessors. Used by the orchestrator to inspect agents without
+  // reaching into the protected `config` field (which previously broke
+  // encapsulation and got mangled under minification).
+  getType(): AgentType {
+    return this.config.type;
+  }
+
+  getName(): string {
+    return this.config.name;
+  }
+
+  getPriority(): number {
+    return this.config.priority;
   }
 
   // Set progress callback
@@ -108,22 +124,27 @@ export abstract class BaseAgent {
     }
   }
 
-  // Execute with timeout
+  // Execute with timeout.
+  //
+  // Previously this used `new Promise(async (resolve, reject) => …)` — an
+  // async-executor anti-pattern that could double-resolve if `analyze()`
+  // settled after the timeout had already fired. The rewrite races a
+  // setTimeout-rejection against `analyze()` and clears the timer in a
+  // `finally` block, guaranteeing exactly one settle.
   private async executeWithTimeout(context: AnalysisContext): Promise<AgentResult> {
-    return new Promise(async (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`Agent ${this.config.name} timed out after ${this.config.timeout}ms`));
-      }, this.config.timeout);
-
-      try {
-        const result = await this.analyze(context);
-        clearTimeout(timeout);
-        resolve(result);
-      } catch (error) {
-        clearTimeout(timeout);
-        reject(error);
-      }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Agent ${this.config.name} timed out after ${this.config.timeout}ms`)),
+        this.config.timeout
+      );
     });
+
+    try {
+      return await Promise.race([this.analyze(context), timeoutPromise]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   // Helper: Get file content from context

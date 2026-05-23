@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { describe, it, expect, beforeAll } from "vitest";
 
 describe("API Endpoints", () => {
   const baseUrl = "http://localhost:3000";

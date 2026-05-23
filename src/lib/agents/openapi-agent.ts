@@ -219,7 +219,10 @@ export class OpenAPIAgent extends BaseAgent {
 
         if (hasSpecificMethod) {
           for (const method of HTTP_METHODS) {
-            if (new RegExp(`req\\.method\\s*(?:===?|!==?)\\s*['"]${m.toUpperCase()}['"]`, "i").test(content)) {
+            // Previous code referenced `m` (stale identifier from the outer
+            // `HTTP_METHODS.some(m => …)`). That meant every iteration checked
+            // the same method, so we missed any method whose check failed once.
+            if (new RegExp(`req\\.method\\s*(?:===?|!==?)\\s*['"]${method.toUpperCase()}['"]`, "i").test(content)) {
               endpoints.push({
                 path: `/api/${routePath}`,
                 method: method.toUpperCase(),

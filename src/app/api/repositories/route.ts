@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { parseLanguages } from "@/lib/repo-fields";
 
 export async function GET(request: NextRequest) {
   try {
@@ -59,13 +60,8 @@ export async function GET(request: NextRequest) {
         docStatus = "missing";
       }
 
-      // Parse languages from JSON
-      let languages: string[] = [];
-      try {
-        languages = repo.languages ? JSON.parse(repo.languages) : [];
-      } catch {
-        languages = [];
-      }
+      // Parse languages via the shared helper.
+      const languages = parseLanguages(repo);
 
       return {
         id: repo.id,
@@ -90,27 +86,33 @@ export async function GET(request: NextRequest) {
       ? reposWithStatus.filter(r => r.docStatus === status)
       : reposWithStatus;
 
-    return NextResponse.json({
-      repositories: filtered.length > 0 ? filtered : getDefaultRepositories(),
-    });
+    return NextResponse.json({ repositories: filtered });
   } catch (error) {
     console.error("Error fetching repositories:", error);
-    return NextResponse.json({
-      repositories: getDefaultRepositories(),
-    });
+    // Previously fell back to a hardcoded `getDefaultRepositories()` fixture on
+    // any DB error — that hid real failures from the UI and masked an empty
+    // DB during tests. Return a proper 500 instead.
+    return NextResponse.json(
+      { error: "Failed to fetch repositories" },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { 
-      name, 
-      slug, 
+    const {
+      name,
+      slug,
       description,
       connectionId,
       repositoryUrl,
-      isPrivate 
+      // Required downstream by the orchestrator (`initializeVCSClient` throws
+      // a misleading error when this is missing). Accept it from the body so
+      // callers can pin a specific owner/repo path independently of the URL.
+      repositoryPath,
+      isPrivate,
     } = body;
 
     if (!name) {
@@ -173,6 +175,8 @@ export async function POST(request: NextRequest) {
         name,
         slug: generatedSlug,
         description: description || null,
+        repositoryPath: typeof repositoryPath === "string" && repositoryPath ? repositoryPath : null,
+        repositoryUrl: typeof repositoryUrl === "string" && repositoryUrl ? repositoryUrl : null,
         languages: null, // Will be detected by AI analysis
         frameworks: null, // Will be detected by AI analysis
       },
@@ -258,87 +262,6 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
-function getDefaultRepositories() {
-  return [
-    {
-      id: "1",
-      name: "auth-service",
-      slug: "auth-service",
-      description: "Authentication and authorization service",
-      connectionId: "default",
-      connectionName: "GitHub",
-      connectionType: "github",
-      connectionUrl: "https://github.com",
-      languages: ["TypeScript"],
-      lastAnalyzedAt: new Date(),
-      docStatus: "complete" as const,
-      docTypes: { c4: true, adr: true, openapi: true, asyncapi: true, contextMap: true, dataCatalog: true },
-      documentCount: 6,
-      adrCount: 3,
-    },
-    {
-      id: "2",
-      name: "payment-svc",
-      slug: "payment-svc",
-      description: "Payment processing service",
-      connectionId: "default",
-      connectionName: "GitLab Internal",
-      connectionType: "gitlab",
-      connectionUrl: "https://gitlab.company.com",
-      languages: ["Java", "Kotlin"],
-      lastAnalyzedAt: new Date(),
-      docStatus: "partial" as const,
-      docTypes: { c4: true, adr: false, openapi: true, asyncapi: false, contextMap: false, dataCatalog: false },
-      documentCount: 3,
-      adrCount: 1,
-    },
-    {
-      id: "3",
-      name: "notification",
-      slug: "notification",
-      description: "Notification delivery service",
-      connectionId: null,
-      connectionName: null,
-      connectionType: null,
-      connectionUrl: null,
-      languages: ["Python"],
-      lastAnalyzedAt: new Date(Date.now() - 86400000),
-      docStatus: "missing" as const,
-      docTypes: { c4: false, adr: false, openapi: true, asyncapi: false, contextMap: false, dataCatalog: false },
-      documentCount: 1,
-      adrCount: 0,
-    },
-    {
-      id: "4",
-      name: "report-gen",
-      slug: "report-gen",
-      description: "Report generation service",
-      connectionId: "default",
-      connectionName: "Bitbucket",
-      connectionType: "bitbucket",
-      connectionUrl: "https://bitbucket.company.com",
-      languages: ["Go", "Rust"],
-      lastAnalyzedAt: new Date(),
-      docStatus: "complete" as const,
-      docTypes: { c4: true, adr: true, openapi: true, asyncapi: false, contextMap: true, dataCatalog: false },
-      documentCount: 4,
-      adrCount: 2,
-    },
-    {
-      id: "5",
-      name: "user-management",
-      slug: "user-management",
-      description: "User management and profile service",
-      connectionId: "default",
-      connectionName: "GitHub",
-      connectionType: "github",
-      connectionUrl: "https://github.com",
-      languages: ["TypeScript", "JavaScript"],
-      lastAnalyzedAt: new Date(Date.now() - 172800000),
-      docStatus: "partial" as const,
-      docTypes: { c4: true, adr: true, openapi: false, asyncapi: false, contextMap: false, dataCatalog: true },
-      documentCount: 3,
-      adrCount: 2,
-    },
-  ];
-}
+// getDefaultRepositories() was deleted in Phase 4. It returned a fixed array
+// of seeded-looking repositories whenever the DB was empty or query failed,
+// which hid both empty-DB states and real errors from the UI / tests.

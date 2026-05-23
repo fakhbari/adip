@@ -1,18 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { AgentOrchestrator } from "@/lib/agents/orchestrator";
-import { 
-  WSProgressMessage, 
+import { runAnalysis, AnalysisAlreadyRunningError } from "@/lib/agents/orchestrator";
+import {
+  WSProgressMessage,
   WSAnalysisCompleteMessage,
-  AgentType 
+  AgentType,
 } from "@/lib/agents/types";
 
-// WebSocket notification helper
-async function sendWsNotification(action: "progress" | "complete" | "error", data: any) {
+// WebSocket notification helper.
+// Talks server-to-server to the mini-service. The previous `?XTransformPort=3003`
+// suffix was only meaningful to the (now-removed) Caddy SSRF block.
+const WS_INTERNAL_URL = process.env.ADIP_WS_INTERNAL_URL ?? "http://localhost:3003";
+
+async function sendWsNotification(action: "progress" | "complete" | "error", data: unknown) {
   try {
-    const response = await fetch(`http://localhost:3003/notify/${action}?XTransformPort=3003`, {
+    const response = await fetch(`${WS_INTERNAL_URL}/notify/${action}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // Phase 3 will require this header on the mini-service side.
+        ...(process.env.ADIP_INTERNAL_TOKEN
+          ? { "X-Internal-Token": process.env.ADIP_INTERNAL_TOKEN }
+          : {}),
+      },
       body: JSON.stringify(data),
     });
     return response.ok;
@@ -53,33 +63,48 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const body = await request.json().catch(() => ({}));
-    const { enabledAgents, triggeredBy = "manual" } = body;
 
-    // Check if repository exists
+    // Distinguish "no body" (= run defaults) from "malformed body" (= 400).
+    // Previously a malformed body was silently swallowed into `{}` and the
+    // analysis still started with all agents enabled — confusing for callers
+    // who thought their typo'd JSON had been accepted.
+    let body: { enabledAgents?: unknown; triggeredBy?: unknown } = {};
+    const rawBody = await request.text();
+    if (rawBody.trim().length > 0) {
+      try {
+        body = JSON.parse(rawBody) ?? {};
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid JSON body" },
+          { status: 400 }
+        );
+      }
+    }
+    const enabledAgents = body.enabledAgents;
+    // Narrow to the orchestrator's accepted literal union.
+    const allowedTriggers = ["manual", "scheduler", "webhook"] as const;
+    type TriggerSource = (typeof allowedTriggers)[number];
+    const triggeredBy: TriggerSource = allowedTriggers.includes(body.triggeredBy as TriggerSource)
+      ? (body.triggeredBy as TriggerSource)
+      : "manual";
+
+    // Repository + AI-provider validation. The orchestrator does its own
+    // strict version of this; the early checks here give a friendlier error
+    // for the common misconfigured cases.
     const repository = await db.repository.findUnique({
       where: { id },
-      include: {
-        connection: true,
-        aiProvider: true,
-      },
+      include: { aiProvider: true },
     });
-
     if (!repository) {
-      return NextResponse.json(
-        { error: "Repository not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Repository not found" }, { status: 404 });
     }
 
-    // Check for AI provider
     let aiProvider = repository.aiProvider;
     if (!aiProvider) {
       aiProvider = await db.aIProvider.findFirst({
         where: { isDefault: true, isActive: true },
       });
     }
-
     if (!aiProvider) {
       return NextResponse.json(
         { error: "No AI provider configured. Please set up a default AI provider in Settings." },
@@ -87,87 +112,37 @@ export async function POST(
       );
     }
 
-    // Check if there's already a running analysis
-    const runningAnalysis = await db.analysisRun.findFirst({
-      where: {
-        repositoryId: id,
-        status: { in: ["QUEUED", "RUNNING"] },
-      },
-    });
-
-    if (runningAnalysis) {
-      return NextResponse.json(
-        { 
-          error: "An analysis is already running for this repository",
-          analysisRunId: runningAnalysis.id,
-          status: runningAnalysis.status,
-        },
-        { status: 409 }
-      );
-    }
-
-    // Create analysis run record
-    const analysisRun = await db.analysisRun.create({
-      data: {
+    try {
+      const { analysisRunId } = await runAnalysis({
         repositoryId: id,
         triggeredBy,
-        status: "QUEUED",
-      },
-    });
-
-    // Create orchestrator
-    const orchestrator = new AgentOrchestrator({
-      analysisRunId: analysisRun.id,
-      repositoryId: id,
-      triggeredBy,
-      enabledAgents: enabledAgents as AgentType[] | undefined,
-    });
-
-    // Set up WebSocket callbacks
-    orchestrator.setCallbacks(
-      // Progress callback
-      async (progress: WSProgressMessage) => {
-        await sendWsNotification("progress", progress);
-      },
-      // Complete callback
-      async (complete: WSAnalysisCompleteMessage) => {
-        await sendWsNotification("complete", complete);
-      }
-    );
-
-    // Update status to running
-    await db.analysisRun.update({
-      where: { id: analysisRun.id },
-      data: { status: "RUNNING", startedAt: new Date() },
-    });
-
-    // Run analysis asynchronously (don't await)
-    orchestrator.execute().catch(async (error) => {
-      console.error("Analysis failed:", error);
-      
-      await db.analysisRun.update({
-        where: { id: analysisRun.id },
-        data: {
-          status: "FAILED",
-          completedAt: new Date(),
-          errors: JSON.stringify([error.message || "Unknown error"]),
+        enabledAgents: enabledAgents as AgentType[] | undefined,
+        onProgress: async (progress: WSProgressMessage) => {
+          await sendWsNotification("progress", progress);
+        },
+        onComplete: async (complete: WSAnalysisCompleteMessage) => {
+          await sendWsNotification("complete", complete);
         },
       });
 
-      // Send error notification
-      await sendWsNotification("error", {
-        analysisRunId: analysisRun.id,
-        repositoryId: id,
-        error: error.message || "Analysis failed",
+      return NextResponse.json({
+        success: true,
+        analysisRunId,
+        status: "RUNNING",
+        message: "Analysis started. Connect to WebSocket for real-time updates.",
       });
-    });
-
-    return NextResponse.json({
-      success: true,
-      analysisRunId: analysisRun.id,
-      status: "QUEUED",
-      message: "Analysis started. Connect to WebSocket for real-time updates.",
-    });
+    } catch (err) {
+      if (err instanceof AnalysisAlreadyRunningError) {
+        return NextResponse.json(
+          {
+            error: err.message,
+            analysisRunId: err.existingRunId,
+          },
+          { status: 409 }
+        );
+      }
+      throw err;
+    }
   } catch (error) {
     console.error("Error starting analysis:", error);
     return NextResponse.json(
@@ -194,9 +169,22 @@ export async function DELETE(
       );
     }
 
-    // Update analysis run to cancelled
+    // Verify the analysisRun actually belongs to this repository before
+    // mutating it. The previous code passed both fields into the `where` of
+    // an `update`, but Prisma requires the where to be a unique selector;
+    // it silently used `id` and ignored `repositoryId`, allowing IDOR
+    // (cancel any repo's analysis by knowing the run ID). 404 here rather
+    // than 403 avoids leaking whether the run exists in another repository.
+    const existing = await db.analysisRun.findUnique({ where: { id: analysisRunId } });
+    if (!existing || existing.repositoryId !== id) {
+      return NextResponse.json(
+        { error: "Analysis run not found" },
+        { status: 404 }
+      );
+    }
+
     const analysisRun = await db.analysisRun.update({
-      where: { id: analysisRunId, repositoryId: id },
+      where: { id: analysisRunId },
       data: {
         status: "CANCELLED",
         completedAt: new Date(),

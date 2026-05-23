@@ -19,6 +19,8 @@ model RepositoryConnection {
   name          String
   type          String   // "bitbucket", "gitlab", "github"
   url           String
+  // Encrypted at rest via src/lib/crypto.ts (AES-256-GCM, v1: prefix).
+  // Never returned in API responses — see settings/connections/route.ts.
   accessToken   String?
   username      String?
   isActive      Boolean  @default(true)
@@ -98,8 +100,12 @@ model Document {
   metadata       String?        // JSON metadata
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
-  
-  @@unique([repositoryId, type])
+
+  // Phase 6: was `@@unique([repositoryId, type])` — that blocked versioning,
+  // so regenerated docs clobbered prior copies. Include `version` in the
+  // unique constraint so analysis runs append a new row each time.
+  @@unique([repositoryId, type, version])
+  @@index([repositoryId])
 }
 
 // ============================================
@@ -130,8 +136,9 @@ model ADR {
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
   supersededBy   String?    // ID of newer ADR if superseded
-  
+
   @@unique([repositoryId, number])
+  @@index([repositoryId])
 }
 
 // ============================================
@@ -175,8 +182,9 @@ model TechnologyUsage {
   version        String?     // Version used
   sourceFile     String?     // Where it was detected (package.json, pom.xml, etc.)
   detectedAt     DateTime    @default(now())
-  
+
   @@unique([repositoryId, technologyId])
+  @@index([repositoryId])
 }
 
 model RadarItem {
@@ -229,11 +237,17 @@ model AnalysisRun {
   triggeredBy    String   // "scheduler", "manual", "webhook"
   status         RunStatus @default(QUEUED)
   startedAt      DateTime?
+  // Phase 7 janitor uses this to detect crashed-in-flight runs.
+  lastHeartbeatAt    DateTime?
   completedAt    DateTime?
   documentsGenerated Int   @default(0)
   errors         String?  // JSON array of errors
   duration       Int?     // Duration in seconds
   createdAt      DateTime @default(now())
+
+  // Used by the "is there already a RUNNING analysis for this repo?" check
+  // and by the janitor sweep over stale rows.
+  @@index([repositoryId, status])
 }
 
 model ScheduleConfig {
@@ -264,7 +278,9 @@ model AIProvider {
   id            String         @id @default(cuid())
   name          String         // Display name
   type          AIProviderType
-  apiKey        String?        // Encrypted API key
+  // Encrypted at rest via src/lib/crypto.ts (AES-256-GCM, v1: prefix).
+  // Never returned in API responses — see settings/ai-providers/route.ts.
+  apiKey        String?
   baseUrl       String?        // For custom/ollama endpoints
   modelName     String         // e.g., "gpt-4", "claude-3-opus"
   isActive      Boolean        @default(true)
@@ -291,6 +307,64 @@ model Setting {
   category  String   // "ai", "notification", "general"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// Auth (NextAuth.js Prisma adapter) — Phase 9
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  // Locally-stored bcrypt hash for the credentials provider. Null when the
+  // user authenticates only via an OAuth provider.
+  passwordHash  String?
+  // Simple role gate. "admin" can manage settings; "user" is read-mostly.
+  role          String    @default("user")
+
+  accounts Account[]
+  sessions Session[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
 
 // ============================================

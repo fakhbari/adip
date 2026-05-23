@@ -1,12 +1,21 @@
 {
   "name": "analysis-websocket-service",
-  "version": "1.0.0",
-  "description": "WebSocket service for analysis notifications",
+  "version": "1.1.0",
+  "description": "WebSocket service for analysis progress notifications. Authenticated /notify/* endpoint; sockets are read-only subscribers.",
   "type": "module",
   "scripts": {
-    "dev": "bun --hot index.ts"
+    "dev": "tsx watch index.ts",
+    "start": "tsx index.ts",
+    "test": "vitest run __tests__"
   },
   "dependencies": {
-    "socket.io": "^4.7.2"
+    "socket.io": "^4.7.2",
+    "zod": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^2"
   }
 }

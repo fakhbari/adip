@@ -1,6 +1,7 @@
 // GitHub VCS Client
 
 import { VCSClient, VCSFile, VCSRepository, VCSBranch, VCSCommit } from "./types";
+import { fetchWithRetry, pLimit } from "./fetch-with-retry";
 
 export class GitHubClient implements VCSClient {
   private accessToken?: string;
@@ -21,8 +22,9 @@ export class GitHubClient implements VCSClient {
       headers["Authorization"] = `Bearer ${this.accessToken}`;
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, { headers });
-    
+    // Phase 7: retry on 429 / 5xx with exponential backoff, honoring Retry-After.
+    const response = await fetchWithRetry(`${this.baseUrl}${path}`, { headers });
+
     if (response.status === 403) {
       throw new Error("GitHub API rate limit exceeded");
     }
@@ -114,42 +116,40 @@ export class GitHubClient implements VCSClient {
         return null;
       }
 
-      // Decode base64 content
-      if (data.encoding === "base64" && data.content) {
-        return Buffer.from(data.content, "base64").toString("utf-8");
+      // Decode base64 content. The GitHub Contents API returns base64-encoded
+      // bytes for files; if the payload is corrupted or unexpectedly typed,
+      // Buffer.from can throw — surface that as a null result rather than
+      // crashing the whole batch fetch.
+      if (data.encoding === "base64" && typeof data.content === "string") {
+        try {
+          return Buffer.from(data.content, "base64").toString("utf-8");
+        } catch (decodeErr) {
+          console.warn(`github-client: failed to decode base64 for ${path}:`, decodeErr);
+          return null;
+        }
       }
 
-      return data.content;
+      return typeof data.content === "string" ? data.content : null;
     } catch (error) {
       return null;
     }
   }
 
   async getMultipleFiles(
-    owner: string, 
-    repo: string, 
-    branch: string, 
+    owner: string,
+    repo: string,
+    branch: string,
     paths: string[]
   ): Promise<Map<string, string>> {
     const contents = new Map<string, string>();
-    
-    // Fetch files in parallel (with concurrency limit)
-    const batchSize = 10;
-    for (let i = 0; i < paths.length; i += batchSize) {
-      const batch = paths.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map(async (path) => {
-          const content = await this.getFileContent(owner, repo, branch, path);
-          return { path, content };
-        })
-      );
 
-      for (const { path, content } of results) {
-        if (content !== null) {
-          contents.set(path, content);
-        }
-      }
-    }
+    // Phase 7: cap concurrency at 5 to be friendlier to the GitHub rate
+    // limit (especially the unauthenticated 60/hr bucket). Previously this
+    // fired 10 in parallel and would exhaust the quota on a medium repo.
+    await pLimit(5, paths, async (path) => {
+      const content = await this.getFileContent(owner, repo, branch, path);
+      if (content !== null) contents.set(path, content);
+    });
 
     return contents;
   }

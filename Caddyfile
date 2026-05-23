@@ -1,23 +1,25 @@
+# ADIP gateway.
+# :81  -> Next.js app on :3000
+# :82  -> Analysis WebSocket service on :3003 (separate site, never query-param driven)
+#
+# Note: the previous `@transform_port_query` block let any external client set
+# ?XTransformPort=<port> and have Caddy reverse-proxy to ANY localhost port
+# (SSRF to internal services). It has been removed. Do not reintroduce it.
+
 :81 {
-	@transform_port_query {
-		query XTransformPort=*
+	reverse_proxy localhost:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
 	}
+}
 
-	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
-	}
-
-	handle {
-		reverse_proxy localhost:3000 {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
+:82 {
+	reverse_proxy localhost:3003 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
 	}
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect } from "vitest";
 
 describe("OpenAPI and Context Map API Endpoints", () => {
   const baseUrl = "http://localhost:3000";

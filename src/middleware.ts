@@ -16,10 +16,14 @@ import { getToken } from "next-auth/jwt";
 const PUBLIC_API_PREFIXES = ["/api/auth", "/api"];
 
 function isPublicApiPath(pathname: string): boolean {
-  // Exact match for /api (health) and /api/metrics (Prometheus scrape).
-  // Subpaths under /api/auth (NextAuth).
+  // Public probes:
+  //   /api          — liveness ping + kicks the janitor.
+  //   /api/metrics  — Prometheus scrape.
+  //   /api/healthz  — deep dependency probe (Polish P6.1).
+  // Subpaths under /api/auth (NextAuth) are always public.
   if (pathname === "/api") return true;
   if (pathname === "/api/metrics") return true;
+  if (pathname === "/api/healthz") return true;
   return pathname.startsWith("/api/auth");
 }
 

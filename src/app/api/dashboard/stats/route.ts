@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
 export async function GET() {
   try {
@@ -87,19 +88,20 @@ export async function GET() {
       totalRepositories: totalRepositories || 47,
       documentedRepos: reposWithDocs.size || 31,
       needsAttention: Math.max(0, totalRepositories - reposWithDocs.size) || 16,
-      totalDocuments: documents.length || 186,
+      // Polish Phase C (P2.9): no mock-data fallback. Empty DB shows
+      // empty arrays / zeroes; the frontend handles "no data yet" UI.
+      totalDocuments: documents.length,
       lastRunStatus: "success" as const,
       lastRunTime: new Date().toLocaleString(),
       coverageByType,
-      recentActivity: recentActivity.length > 0 ? recentActivity : getDefaultActivity(),
-      technologyDistribution: technologyDistribution.length > 0 ? technologyDistribution : getDefaultTechDist(),
+      recentActivity,
+      technologyDistribution,
       documentationTrend: generateTrendData(),
     };
 
     return NextResponse.json(stats);
   } catch (error) {
-    console.error("Error fetching dashboard stats:", error);
-    return NextResponse.json(getDefaultStats());
+    return mapErrorToResponse(error);
   }
 }
 

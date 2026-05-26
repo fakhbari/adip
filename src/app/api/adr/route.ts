@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const adrs = await db.aDR.findMany({
-      include: {
-        repository: {
-          select: { name: true },
-        },
-      },
+      include: { repository: { select: { name: true } } },
       orderBy: [{ repositoryId: "asc" }, { number: "asc" }],
     });
 
@@ -16,10 +13,6 @@ export async function GET(request: NextRequest) {
       where: { isActive: true },
       select: { id: true, name: true },
     });
-
-    if (adrs.length === 0) {
-      return NextResponse.json(getDefaultADRData(repositories));
-    }
 
     const formattedADRs = adrs.map((adr) => ({
       id: adr.id,
@@ -42,14 +35,14 @@ export async function GET(request: NextRequest) {
       deprecated: adrs.filter((a) => a.status === "DEPRECATED" || a.status === "SUPERSEDED").length,
     };
 
+    // Polish Phase C (P2.9): no mock-data fallback.
     return NextResponse.json({
       adrs: formattedADRs,
       stats,
-      repositories: repositories.length > 0 ? repositories : getDefaultRepositories(),
+      repositories,
     });
   } catch (error) {
-    console.error("Error fetching ADRs:", error);
-    return NextResponse.json(getDefaultADRData([]));
+    return mapErrorToResponse(error);
   }
 }
 

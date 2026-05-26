@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const technologies = await db.radarItem.findMany({
       where: { isActive: true },
@@ -12,10 +13,8 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: "desc" },
     });
 
-    // If no data, return default
-    if (technologies.length === 0) {
-      return NextResponse.json(getDefaultRadarData());
-    }
+    // Polish Phase C (P2.9): no mock-data fallback. Empty DB returns
+    // an empty radar; frontend renders the empty state.
 
     const formattedTechnologies = technologies.map((item) => ({
       id: item.id,
@@ -58,8 +57,7 @@ export async function GET(request: NextRequest) {
       stats,
     });
   } catch (error) {
-    console.error("Error fetching radar data:", error);
-    return NextResponse.json(getDefaultRadarData());
+    return mapErrorToResponse(error);
   }
 }
 

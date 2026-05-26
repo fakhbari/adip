@@ -1,28 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const documents = await db.document.findMany({
       where: { type: "OPENAPI" },
-      include: {
-        repository: { select: { id: true, name: true } },
-      },
+      include: { repository: { select: { id: true, name: true } } },
     });
 
     const repositories = await db.repository.findMany({
       where: { isActive: true },
       select: { id: true, name: true },
     });
-
-    if (documents.length === 0) {
-      return NextResponse.json({
-        documents: getDefaultDocuments(),
-        repositories: repositories.length > 0
-          ? repositories.map((r) => ({ id: r.id, name: r.name, hasOpenAPI: false }))
-          : getDefaultRepositories(),
-      });
-    }
 
     const formattedDocuments = documents.map((doc) => ({
       id: doc.id,
@@ -31,13 +21,15 @@ export async function GET(request: NextRequest) {
       title: doc.title || "API Specification",
       version: "1.0.0",
       description: "OpenAPI specification for the service",
-      endpointCount: 8,
-      schemaCount: 6,
-      content: doc.content || getDefaultYAML(doc.repository.name),
+      endpointCount: 0,
+      schemaCount: 0,
+      content: doc.content ?? "",
       status: doc.status,
       generatedAt: doc.generatedAt,
     }));
 
+    // Polish Phase C (P2.9): no mock-data fallback. Empty DB returns
+    // an empty list; the frontend renders the empty state.
     return NextResponse.json({
       documents: formattedDocuments,
       repositories: repositories.map((r) => ({
@@ -47,11 +39,7 @@ export async function GET(request: NextRequest) {
       })),
     });
   } catch (error) {
-    console.error("Error fetching OpenAPI data:", error);
-    return NextResponse.json({
-      documents: getDefaultDocuments(),
-      repositories: getDefaultRepositories(),
-    });
+    return mapErrorToResponse(error);
   }
 }
 

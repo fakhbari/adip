@@ -4,6 +4,7 @@ import { AnalysisAlreadyRunningError } from "@/lib/agents/orchestrator";
 import { enqueueAnalysis } from "@/lib/queue";
 import { requireTenant, assertOwnership } from "@/lib/tenant";
 import { AgentType } from "@/lib/agents/types";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
 // WebSocket notification helper.
 // Talks server-to-server to the mini-service. The previous `?XTransformPort=3003`
@@ -138,23 +139,14 @@ export async function POST(
         message: "Analysis queued. Connect to WebSocket for real-time updates.",
       });
     } catch (err) {
-      if (err instanceof AnalysisAlreadyRunningError) {
-        return NextResponse.json(
-          {
-            error: err.message,
-            analysisRunId: err.existingRunId,
-          },
-          { status: 409 }
-        );
-      }
-      throw err;
+      // AnalysisAlreadyRunningError + everything else now flow through
+      // the structured envelope; `mapErrorToResponse` knows how to
+      // surface the existing run id on 409 and never leaks raw message
+      // text on 500.
+      return mapErrorToResponse(err);
     }
   } catch (error) {
-    console.error("Error starting analysis:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to start analysis" },
-      { status: 500 }
-    );
+    return mapErrorToResponse(error);
   }
 }
 

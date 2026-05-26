@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
 import { requireTenant, withTenant } from "@/lib/tenant";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
 // Per-tenant settings. Setting now has a composite unique [tenantId, key]
 // — the upserts use the compound where shape `tenantId_key`.
@@ -64,8 +65,7 @@ export async function GET(request: NextRequest) {
       settings: settingsObj,
     });
   } catch (error) {
-    console.error("Error fetching settings:", error);
-    return NextResponse.json({ error: "Failed to fetch settings" }, { status: 500 });
+    return mapErrorToResponse(error);
   }
 }
 
@@ -74,8 +74,15 @@ export async function POST(request: NextRequest) {
     const ctx = await requireTenant(request);
     if (ctx instanceof NextResponse) return ctx;
 
-    const body = await request.json();
-    const { aiProvider, apiKey, notifications } = body;
+    // Polish Phase C (P3.2): malformed body → 400 INVALID_JSON via the
+    // structured envelope, instead of crashing the route.
+    let body: { aiProvider?: string; apiKey?: string; notifications?: { email?: boolean; slack?: boolean; teams?: boolean } };
+    try {
+      body = await request.json();
+    } catch (err) {
+      return mapErrorToResponse(err);
+    }
+    const { aiProvider, apiKey, notifications } = body ?? {};
 
     if (aiProvider) {
       await db.setting.upsert({
@@ -116,7 +123,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Error saving settings:", error);
-    return NextResponse.json({ error: "Failed to save settings" }, { status: 500 });
+    return mapErrorToResponse(error);
   }
 }

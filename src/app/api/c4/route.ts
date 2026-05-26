@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
 export async function GET(request: NextRequest) {
   try {
@@ -53,16 +54,9 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // If no documents, return defaults
-    if (documents.length === 0) {
-      return NextResponse.json({
-        documents: getDefaultDocuments(),
-        repositories: repositories.length > 0
-          ? repositories.map((r) => ({ id: r.id, name: r.name, hasC4: false }))
-          : getDefaultRepositories(),
-      });
-    }
-
+    // Polish Phase C (P2.9): no more fake-data fallback for empty
+    // results. Empty DB returns an empty payload; the frontend renders
+    // the empty state. Errors map through the structured envelope.
     return NextResponse.json({
       documents: formattedDocuments,
       repositories: repositories.map((r) => ({
@@ -72,11 +66,7 @@ export async function GET(request: NextRequest) {
       })),
     });
   } catch (error) {
-    console.error("Error fetching C4 data:", error);
-    return NextResponse.json({
-      documents: getDefaultDocuments(),
-      repositories: getDefaultRepositories(),
-    });
+    return mapErrorToResponse(error);
   }
 }
 

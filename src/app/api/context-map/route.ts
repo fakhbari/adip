@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const documents = await db.document.findMany({
       where: { type: "CONTEXT_MAP" },
-      include: {
-        repository: { select: { id: true, name: true } },
-      },
+      include: { repository: { select: { id: true, name: true } } },
     });
 
     const repositories = await db.repository.findMany({
@@ -15,25 +14,17 @@ export async function GET(request: NextRequest) {
       select: { id: true, name: true },
     });
 
-    if (documents.length === 0) {
-      return NextResponse.json({
-        documents: getDefaultDocuments(),
-        repositories: repositories.length > 0
-          ? repositories.map((r) => ({ id: r.id, name: r.name, hasContextMap: false }))
-          : getDefaultRepositories(),
-      });
-    }
-
     const formattedDocuments = documents.map((doc) => ({
       id: doc.id,
       repositoryId: doc.repositoryId,
       repositoryName: doc.repository.name,
-      content: doc.content || getDefaultMarkdown(doc.repository.name),
-      contexts: getDefaultContexts(),
+      content: doc.content ?? "",
+      contexts: [],
       status: doc.status,
       generatedAt: doc.generatedAt,
     }));
 
+    // Polish Phase C (P2.9): no mock-data fallback.
     return NextResponse.json({
       documents: formattedDocuments,
       repositories: repositories.map((r) => ({
@@ -43,11 +34,7 @@ export async function GET(request: NextRequest) {
       })),
     });
   } catch (error) {
-    console.error("Error fetching context map data:", error);
-    return NextResponse.json({
-      documents: getDefaultDocuments(),
-      repositories: getDefaultRepositories(),
-    });
+    return mapErrorToResponse(error);
   }
 }
 

@@ -435,12 +435,74 @@ model VerificationToken {
 
 model ActivityLog {
   id          String   @id @default(cuid())
+  // Polish Phase E.1 (P1.1): tenant boundary on audit rows.
+  // Nullable for system-emitted events (janitor, scheduler) — see
+  // `logActivitySystem` in src/lib/audit.ts. Application code must
+  // populate it for user-driven mutations.
+  tenantId    String?
   action      String   // "repo_added", "doc_generated", "radar_updated", etc.
   entityType  String   // "repository", "document", "technology", etc.
   entityId    String?
   details     String?  // JSON details
   userId      String?
   createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([entityType, entityId])
+  @@index([action])
+}
+
+// Polish Phase D.1 (P1.1): per-run event log. Stores the structured
+// timeline an `AnalysisRun` produces — agent lifecycle, LLM call start /
+// end, persisted prompt + response payloads, snapshot writes, and any
+// agent failure. The run-detail UI joins this against AnalysisRun +
+// LLMUsage + Document; the live-log page consumes events written here
+// and re-streamed over the WS `agent-event` / `llm-delta` channels.
+//
+// Event shape:
+//   - type:     "run-start" | "agent-start" | "agent-end" | "agent-failed"
+//               | "llm-prompt" | "llm-delta" | "llm-response"
+//               | "llm-call-start" | "llm-call-end"
+//               | "snapshot-write" | "save-results"
+//               | "run-complete" | "run-failed"
+//   - agentType is only present for agent-* and llm-* events.
+//   - content is freeform — JSON-stringified for structured payloads,
+//     raw text for llm-prompt / llm-response.
+//   - llmUsageId points at the matching LLMUsage row when applicable.
+model RunEvent {
+  id            String   @id @default(cuid())
+  analysisRunId String
+  type          String
+  agentType     String?
+  content       String?  // payload (string; JSON-stringified when needed)
+  role          String?  // "system" | "user" | "assistant" for llm-* events
+  llmUsageId    String?
+  ts            DateTime @default(now())
+
+  @@index([analysisRunId, ts])
+  @@index([type])
+}
+
+// Polish Phase F.4 (P1.1): record of every Slack / Teams / email
+// delivery the dispatcher attempts. Failed deliveries are retried via
+// the `adip-notification-retry` BullMQ queue with exponential backoff.
+// The admin UI lists the last 50 with a manual "retry" button.
+model NotificationDelivery {
+  id            String   @id @default(cuid())
+  tenantId      String
+  kind          String   // "analysis-complete" | "analysis-failed" | "weekly-digest" | …
+  channel       String   // "slack" | "teams" | "email"
+  payload       String   // JSON-stringified body sent to the channel
+  status        String   @default("pending") // "pending" | "sent" | "failed" | "retrying"
+  statusCode    Int?
+  error         String?
+  retryCount    Int      @default(0)
+  sentAt        DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([status])
 }
 
 // ============================================

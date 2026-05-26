@@ -1,22 +1,21 @@
-// vLLM provider — delegates to the Python sidecar (`adip-graph`)
-// since vLLM ships only Python bindings. The sidecar is optional;
-// instantiating this provider without the sidecar URL throws.
+// vLLM provider — delegates to a vLLM server (typically run as the
+// Python sidecar `adip-graph` in Phase 2.7) over its OpenAI-shape
+// HTTP surface.
+//
+// Implemented as its own class (not a subclass of OpenAIProvider) so
+// the `kind` literal can be "vllm" without TypeScript fighting us
+// over readonly-property narrowing across the inheritance chain.
 
+import type { LLMProvider } from "./provider";
 import { OpenAIProvider } from "./openai";
+import type { ChatMessage, ChatOptions, ChatResult, EmbedOptions, EmbedResult } from "./types";
 
 const DEFAULT_BASE_URL = process.env.ADIP_SIDECAR_URL ?? "http://localhost:8080/v1";
 
-/**
- * vLLM exposes an OpenAI-shaped HTTP API by default
- * (`vllm serve --api-key …`). Reuse the OpenAIProvider with a different
- * baseUrl. If/when the sidecar grows custom endpoints (LangGraph runs,
- * tool dispatch), this class can be replaced with a bespoke driver.
- */
-export class VllmProvider extends OpenAIProvider {
-  // Override the parent's readonly kind so the factory + telemetry
-  // report this as `vllm`, not `openai`. `override` keyword keeps the
-  // narrowed literal compatible with the LLMProvider interface.
-  declare readonly kind: "vllm";
+export class VllmProvider implements LLMProvider {
+  readonly kind = "vllm";
+  readonly model: string;
+  private readonly inner: OpenAIProvider;
 
   constructor(opts: {
     apiKey?: string;
@@ -25,13 +24,21 @@ export class VllmProvider extends OpenAIProvider {
     maxTokens?: number;
     temperature?: number;
   }) {
-    super({
+    this.model = opts.model;
+    this.inner = new OpenAIProvider({
       apiKey: opts.apiKey ?? "vllm",
       model: opts.model,
       baseUrl: opts.baseUrl ?? DEFAULT_BASE_URL,
       maxTokens: opts.maxTokens,
       temperature: opts.temperature,
     });
-    (this as { kind: string }).kind = "vllm";
+  }
+
+  chat(messages: ChatMessage[], opts?: ChatOptions): Promise<ChatResult> {
+    return this.inner.chat(messages, opts);
+  }
+
+  embed(texts: string[], opts?: EmbedOptions): Promise<EmbedResult> {
+    return this.inner.embed(texts, opts);
   }
 }

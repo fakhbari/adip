@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import ZAI from "z-ai-web-dev-sdk";
+import { createLLMProvider } from "@/lib/llm";
+import { decryptOptional } from "@/lib/crypto";
 
 /**
  * Pull the first language / framework from the JSON-string columns Prisma
@@ -55,7 +56,21 @@ export async function POST(request: NextRequest) {
     const language = pickFirstFromJsonArray(repository.languages);
     const framework = pickFirstFromJsonArray(repository.frameworks);
 
-    const zai = await ZAI.create();
+    // Phase 2.1: route through the LLMProvider adapter instead of the
+    // hardcoded z-ai-web-dev-sdk. Picks the tenant's default AIProvider
+    // when the repository does not pin one.
+    const aiRow =
+      (repository.aiProviderId
+        ? await db.aIProvider.findUnique({ where: { id: repository.aiProviderId } })
+        : null) ??
+      (await db.aIProvider.findFirst({ where: { isDefault: true, isActive: true } }));
+    if (!aiRow) {
+      return NextResponse.json(
+        { error: "No AI provider configured" },
+        { status: 400 }
+      );
+    }
+    const llm = createLLMProvider({ ...aiRow, apiKey: decryptOptional(aiRow.apiKey) });
 
     const systemPrompt = `You are an expert software architect specializing in architecture documentation.
 Your task is to analyze repository information and generate an Architecture Decision Record (ADR).
@@ -81,18 +96,14 @@ framework: ${safeForPrompt(framework)}
 Generate an ADR that could be relevant for this repository. If the repository uses specific technologies,
 suggest decisions related to those technologies.`;
 
-    // Previously the system prompt was sent as `role: "assistant"` (a bug —
-    // assistant messages are model output, not instructions). Use the correct
-    // role so the model receives the system message as such.
-    const completion = await zai.chat.completions.create({
-      messages: [
+    const completion = await llm.chat(
+      [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      thinking: { type: "disabled" },
-    });
-
-    const response = completion.choices[0]?.message?.content;
+      { meta: { repositoryId } }
+    );
+    const response = completion.content;
 
     // Parse the response as JSON
     let adrData;

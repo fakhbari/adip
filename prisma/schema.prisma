@@ -330,6 +330,27 @@ model AIProvider {
   @@index([tenantId])
 }
 
+// Phase 2.1: LLM call accounting. One row per call so we can join into
+// `AnalysisRun` for per-run cost reports and into `Repository` for
+// per-repo token spend in the dashboard.
+model LLMUsage {
+  id               String   @id @default(cuid())
+  provider         String
+  model            String
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  analysisRunId    String?
+  repositoryId     String?
+  agentType        String?
+  createdAt        DateTime @default(now())
+
+  @@index([provider, model])
+  @@index([repositoryId])
+  @@index([analysisRunId])
+  @@index([createdAt])
+}
+
 // ============================================
 // Settings & Configuration
 // ============================================

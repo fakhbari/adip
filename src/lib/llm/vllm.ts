@@ -13,7 +13,10 @@ const DEFAULT_BASE_URL = process.env.ADIP_SIDECAR_URL ?? "http://localhost:8080/
  * tool dispatch), this class can be replaced with a bespoke driver.
  */
 export class VllmProvider extends OpenAIProvider {
-  readonly kind = "vllm";
+  // Override the parent's readonly kind so the factory + telemetry
+  // report this as `vllm`, not `openai`. `override` keyword keeps the
+  // narrowed literal compatible with the LLMProvider interface.
+  declare readonly kind: "vllm";
 
   constructor(opts: {
     apiKey?: string;
@@ -29,5 +32,6 @@ export class VllmProvider extends OpenAIProvider {
       maxTokens: opts.maxTokens,
       temperature: opts.temperature,
     });
+    (this as { kind: string }).kind = "vllm";
   }
 }

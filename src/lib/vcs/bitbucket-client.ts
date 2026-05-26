@@ -1,6 +1,7 @@
 // Bitbucket VCS Client
 
 import { VCSClient, VCSFile, VCSRepository, VCSBranch, VCSCommit } from "./types";
+import { fetchWithRetry } from "./fetch-with-retry";
 
 export class BitbucketClient implements VCSClient {
   private accessToken?: string;
@@ -26,7 +27,8 @@ export class BitbucketClient implements VCSClient {
       headers["Authorization"] = `Bearer ${this.accessToken}`;
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, { headers });
+    // Phase 1.2: retry on 429 / 5xx + backoff. Was raw `fetch`.
+    const response = await fetchWithRetry(`${this.baseUrl}${path}`, { headers });
 
     if (response.status === 403) {
       throw new Error("Bitbucket API rate limit or access denied");

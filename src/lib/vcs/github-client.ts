@@ -194,26 +194,50 @@ export class GitHubClient implements VCSClient {
     }));
   }
 
-  // Helper: Get full tree recursively
+  // Helper: Get full tree recursively.
+  //
+  // Phase 1.2: GitHub's `/git/trees/{sha}?recursive=1` returns at most
+  // ~100,000 entries and sets `truncated: true` when it cuts off. The
+  // previous implementation silently dropped everything past that
+  // boundary. We now detect truncation and walk each top-level subtree
+  // individually so heavy monorepos return their full file list.
   async getFullTree(owner: string, repo: string, branch: string): Promise<VCSFile[]> {
-    // First get the tree SHA for the branch
     const refResponse = await this.request(`/repos/${owner}/${repo}/git/ref/heads/${branch}`);
     const refData = await refResponse.json();
     const treeSha = refData.object.sha;
 
-    // Get the full tree
     const treeResponse = await this.request(
       `/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`
     );
     const treeData = await treeResponse.json();
 
-    return treeData.tree
-      .filter((item: any) => item.type === "blob")
-      .map((item: any) => ({
-        path: item.path,
-        type: "file" as const,
-        sha: item.sha,
-        size: item.size,
-      }));
+    if (!treeData.truncated) {
+      return (treeData.tree as Array<{ path: string; type: string; sha: string; size?: number }>)
+        .filter((item) => item.type === "blob")
+        .map((item) => ({ path: item.path, type: "file" as const, sha: item.sha, size: item.size }));
+    }
+
+    // Truncated — recurse subtree by subtree.
+    const blobs: VCSFile[] = [];
+    const queue: Array<{ sha: string; prefix: string }> = [{ sha: treeSha, prefix: "" }];
+    const seen = new Set<string>();
+
+    while (queue.length > 0) {
+      const { sha, prefix } = queue.shift()!;
+      if (seen.has(sha)) continue;
+      seen.add(sha);
+
+      const subResp = await this.request(`/repos/${owner}/${repo}/git/trees/${sha}`);
+      const subData = await subResp.json();
+      for (const item of subData.tree as Array<{ path: string; type: string; sha: string; size?: number }>) {
+        const fullPath = prefix ? `${prefix}/${item.path}` : item.path;
+        if (item.type === "blob") {
+          blobs.push({ path: fullPath, type: "file", sha: item.sha, size: item.size });
+        } else if (item.type === "tree") {
+          queue.push({ sha: item.sha, prefix: fullPath });
+        }
+      }
+    }
+    return blobs;
   }
 }

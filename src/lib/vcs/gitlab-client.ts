@@ -1,6 +1,7 @@
 // GitLab VCS Client
 
 import { VCSClient, VCSFile, VCSRepository, VCSBranch, VCSCommit } from "./types";
+import { fetchWithRetry } from "./fetch-with-retry";
 
 export class GitLabClient implements VCSClient {
   private accessToken?: string;
@@ -24,7 +25,9 @@ export class GitLabClient implements VCSClient {
       headers["Private-Token"] = this.accessToken;
     }
 
-    const response = await fetch(`${this.baseUrl}${path}`, { headers });
+    // Phase 1.2: retry on 429 / 5xx + backoff. Was raw `fetch`; only GitHub
+    // had retries before.
+    const response = await fetchWithRetry(`${this.baseUrl}${path}`, { headers });
 
     if (response.status === 403) {
       throw new Error("GitLab API rate limit or access denied");
@@ -183,20 +186,35 @@ export class GitLabClient implements VCSClient {
     }));
   }
 
-  // Helper: Get full tree recursively
+  // Helper: Get full tree recursively.
+  //
+  // Phase 1.2: GitLab's `/repository/tree` paginates at `per_page=100`
+  // by default (max 100 even when you ask for 1000 — it silently caps).
+  // The previous code asked for per_page=1000 and consumed only page 1.
+  // Now we follow the `x-next-page` header until exhausted.
   async getFullTree(owner: string, repo: string, branch: string): Promise<VCSFile[]> {
     const projectPath = this.encodeProjectPath(owner, repo);
-    const response = await this.request(
-      `/projects/${projectPath}/repository/tree?ref=${branch}&recursive=true&per_page=1000`
-    );
-    const data = await response.json();
-
-    return data
-      .filter((item: any) => item.type === "blob")
-      .map((item: any) => ({
-        path: item.path,
-        type: "file" as const,
-        sha: item.id,
-      }));
+    const all: VCSFile[] = [];
+    let page = 1;
+    const perPage = 100;
+    // Bound the loop to avoid runaway pulls on misbehaving APIs; 10000
+    // pages × 100 = 1M files would already be pathological.
+    for (let i = 0; i < 10000; i++) {
+      const response = await this.request(
+        `/projects/${projectPath}/repository/tree?ref=${branch}&recursive=true&per_page=${perPage}&page=${page}`
+      );
+      const data = await response.json();
+      if (!Array.isArray(data) || data.length === 0) break;
+      for (const item of data as Array<{ path: string; type: string; id: string }>) {
+        if (item.type === "blob") {
+          all.push({ path: item.path, type: "file", sha: item.id });
+        }
+      }
+      const next = response.headers.get("x-next-page");
+      if (!next || next === "") break;
+      page = Number(next);
+      if (!Number.isFinite(page) || page <= 0) break;
+    }
+    return all;
   }
 }

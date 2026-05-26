@@ -228,6 +228,20 @@ export function createAgentConfig(
       priority: 5,
       timeout: 180000,  // 3 minutes
     },
+    "data-catalog": {
+      type: "data-catalog",
+      name: "Data Catalog Agent",
+      description: "Extracts ERD + data dictionary from migrations and ORM models",
+      priority: 6,
+      timeout: 180000,
+    },
+    "context-map": {
+      type: "context-map",
+      name: "Context Map Agent",
+      description: "Detects DDD bounded contexts and inter-context relationships",
+      priority: 7,
+      timeout: 180000,
+    },
   };
 
   const base = defaults[type];

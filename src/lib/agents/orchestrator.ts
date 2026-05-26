@@ -66,6 +66,8 @@ import { C4Agent } from "./c4-agent";
 import { ADRAgent } from "./adr-agent";
 import { OpenAPIAgent } from "./openapi-agent";
 import { AsyncAPIAgent } from "./asyncapi-agent";
+import { DataCatalogAgent } from "./data-catalog-agent";
+import { ContextMapAgent } from "./context-map-agent";
 
 // ============================================
 // Orchestrator Configuration
@@ -130,6 +132,9 @@ export class AgentOrchestrator {
       "openapi": OpenAPIAgent,
       // Phase 3.1: dedicated AsyncAPIAgent (was aliased to OpenAPIAgent).
       "asyncapi": AsyncAPIAgent,
+      // Phases 3.2 / 3.3:
+      "data-catalog": DataCatalogAgent,
+      "context-map": ContextMapAgent,
     };
 
     this.agents = enabledAgents

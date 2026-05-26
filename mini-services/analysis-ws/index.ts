@@ -178,6 +178,48 @@ function reply(res: ServerResponse, status: number, body: object): void {
   res.end(JSON.stringify(body));
 }
 
+// Phase 1.5: progress-event coalescer.
+//
+// 10 parallel analyses × 5 agents × heartbeats × per-step progress
+// callbacks can flood the WS room with hundreds of events per second.
+// Browsers do not need every one; the latest in a short window is
+// enough. We hold the freshest progress payload per analysisRunId and
+// emit it on a fixed cadence (default 200 ms). Completion / error
+// events bypass the coalescer and fire immediately so the UI updates
+// without delay at terminal state.
+
+const COALESCE_INTERVAL_MS = 200;
+type Pending = { payload: { analysisRunId: string; repositoryId: string }; timer: NodeJS.Timeout };
+const pendingProgress = new Map<string, Pending>();
+
+function emitNow(event: string, payload: { analysisRunId: string; repositoryId: string }): void {
+  io.to(`analysis:${payload.analysisRunId}`).emit(event, payload);
+  io.to(`repository:${payload.repositoryId}`).emit(event, payload);
+}
+
+function emitCoalescedProgress(payload: { analysisRunId: string; repositoryId: string }): void {
+  const existing = pendingProgress.get(payload.analysisRunId);
+  if (existing) {
+    // Replace payload; let the existing timer fire on schedule.
+    existing.payload = payload;
+    return;
+  }
+  const timer = setTimeout(() => {
+    const pending = pendingProgress.get(payload.analysisRunId);
+    pendingProgress.delete(payload.analysisRunId);
+    if (pending) emitNow("analysis-progress", pending.payload);
+  }, COALESCE_INTERVAL_MS);
+  pendingProgress.set(payload.analysisRunId, { payload, timer });
+}
+
+function flushPendingFor(analysisRunId: string): void {
+  const pending = pendingProgress.get(analysisRunId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingProgress.delete(analysisRunId);
+  emitNow("analysis-progress", pending.payload);
+}
+
 httpServer.on("request", async (req, res) => {
   // Health check (no auth needed). Lets `curl :3003/healthz` succeed for liveness probes.
   if (req.method === "GET" && req.url === "/healthz") {
@@ -204,9 +246,14 @@ httpServer.on("request", async (req, res) => {
   }
 
   const { action, payload } = result;
-  const event = `analysis-${action}` as const;
-  io.to(`analysis:${payload.analysisRunId}`).emit(event, payload);
-  io.to(`repository:${payload.repositoryId}`).emit(event, payload);
+  // Phase 1.5: progress is coalesced; complete + error are immediate
+  // (after flushing any held progress so the UI sees the last frame).
+  if (action === "progress") {
+    emitCoalescedProgress(payload);
+  } else {
+    flushPendingFor(payload.analysisRunId);
+    emitNow(`analysis-${action}`, payload);
+  }
 
   if (action === "complete") {
     // Clean up the analysis room after a delay so any late join still sees the

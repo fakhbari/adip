@@ -1,0 +1,44 @@
+# ADIP dev/test stack.
+#
+# Brought up automatically by scripts/bootstrap.sh. Ports are non-default
+# (5433 / 6380) so they don't collide with any other Postgres/Redis the
+# developer may already be running.
+
+services:
+  postgres:
+    # pgvector/pgvector ships Postgres 16 with the `vector` extension
+    # pre-installed (used by Phase 2.3's RAG store).
+    image: pgvector/pgvector:pg16
+    container_name: adip-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adip
+      POSTGRES_USER: adip
+      POSTGRES_PASSWORD: adip
+    ports:
+      - "5433:5432"
+    volumes:
+      - adip_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adip -d adip"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: adip-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - adip_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  adip_postgres_data:
+  adip_redis_data:

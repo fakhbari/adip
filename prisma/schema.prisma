@@ -5,8 +5,16 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Phase 0.1 (Completion Plan): switched from sqlite to postgresql.
+// SQLite was the MVP store; postgres is required for: (a) writer
+// concurrency with the worker pool, (b) pgvector for RAG embeddings in
+// Phase 2.3, (c) multi-tenant row-level performance. Bring up the
+// `pgvector/pgvector:pg16` container in docker-compose.yml; it ships
+// the `vector` extension. JSON columns remain `String?` for now (parsed
+// via src/lib/repo-fields.ts); conversion to native `Json` is tracked
+// as a Phase 0.1 follow-up.
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

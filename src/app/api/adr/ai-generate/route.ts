@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createLLMProvider } from "@/lib/llm";
 import { decryptOptional } from "@/lib/crypto";
+import { mapErrorToResponse } from "@/lib/api-errors";
 
 /**
  * Pull the first language / framework from the JSON-string columns Prisma
@@ -130,13 +131,10 @@ suggest decisions related to those technologies.`;
 
     return NextResponse.json(adrData);
   } catch (error) {
-    console.error("Error generating ADR:", error);
-    return NextResponse.json({
-      title: "Architecture Decision Required",
-      context: "Analysis of the repository suggests an architecture decision should be documented.",
-      decision: "To be determined after manual review.",
-      consequences: null,
-      alternatives: null,
-    });
+    // Polish P3.6 — the hardcoded fallback ADR previously masked LLM
+    // failures (timeouts, bad API keys, quota). The frontend now sees
+    // a real 500 with a logged requestId and can show a "regenerate"
+    // toast instead of silently storing a stub document.
+    return mapErrorToResponse(error);
   }
 }

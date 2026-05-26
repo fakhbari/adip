@@ -105,18 +105,27 @@ export class BitbucketClient implements VCSClient {
       const response = await this.request(
         `/repositories/${owner}/${repo}/src/${branch}/${path}`
       );
-      
+
       // Check if it's a file
       const contentType = response.headers.get("content-type");
       if (contentType?.includes("application/json")) {
-        const data = await response.json();
-        if (data.type === "commit_directory") {
+        try {
+          const data = await response.json();
+          if (data.type === "commit_directory") return null;
+        } catch {
+          // Malformed JSON for a directory marker — treat as missing.
           return null;
         }
       }
 
-      return await response.text();
-    } catch (error) {
+      // Polish P3.5 — `response.text()` can fail on truncated streams;
+      // surface that as a null read rather than crashing the batch.
+      try {
+        return await response.text();
+      } catch {
+        return null;
+      }
+    } catch {
       return null;
     }
   }

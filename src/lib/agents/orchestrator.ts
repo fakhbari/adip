@@ -8,6 +8,7 @@ import { logger } from "@/lib/logger";
 import { agentDurationSeconds, analysisRunsTotal } from "@/lib/metrics";
 import { RepoFileCache } from "./repo-file-cache";
 import { createLLMProvider, type LLMProvider } from "@/lib/llm";
+import { recordRunEvent } from "@/lib/run-events";
 
 const orchLog = logger("orchestrator");
 import type { DocumentType, Prisma } from "@prisma/client";
@@ -194,6 +195,14 @@ export class AgentOrchestrator {
     this.results = [];
     this.startHeartbeat();
 
+    // Polish P4.1 — record run-start so the run-detail UI has a timeline
+    // anchor even if the orchestrator throws before its first agent.
+    await recordRunEvent({
+      analysisRunId: this.config.analysisRunId,
+      type: "run-start",
+      content: { repositoryId: this.config.repositoryId, triggeredBy: this.config.triggeredBy },
+    });
+
     try {
       // Step 1: Load repository context
       await this.loadRepositoryContext();
@@ -306,11 +315,30 @@ export class AgentOrchestrator {
           this.sendProgress(progress);
         });
 
+        // Polish P4.1 — emit RunEvent for the per-agent timeline.
+        // BaseAgent.execute() already catches inside agent code, but
+        // these events are what the run-detail UI consumes.
+        await recordRunEvent({
+          analysisRunId: this.config.analysisRunId,
+          type: "agent-start",
+          agentType: agent.getType(),
+        });
         const agentStart = Date.now();
         const result = await agent.execute(context);
         const seconds = (Date.now() - agentStart) / 1000;
         agentDurationSeconds.labels(result.agentType, result.status).observe(seconds);
         this.results.push(result);
+        await recordRunEvent({
+          analysisRunId: this.config.analysisRunId,
+          type: result.status === "success" ? "agent-end" : "agent-failed",
+          agentType: result.agentType,
+          content: {
+            duration: seconds,
+            status: result.status,
+            error: result.error,
+            filesAnalyzed: result.filesAnalyzed,
+          },
+        });
 
         currentProgress += progressPerAgent;
         this.sendProgress({
@@ -325,6 +353,11 @@ export class AgentOrchestrator {
 
       // Step 6: Save results to database
       await this.saveResults();
+      await recordRunEvent({
+        analysisRunId: this.config.analysisRunId,
+        type: "save-results",
+        content: { agents: this.results.length, successes: this.results.filter((r) => r.status === "success").length },
+      });
       this.sendProgress({
         agentId: "orchestrator",
         agentType: "tech-radar",
@@ -341,6 +374,11 @@ export class AgentOrchestrator {
           await db.repoSnapshot.create({
             data: { repositoryId: this.config.repositoryId, commitSha: context.currentSha },
           });
+          await recordRunEvent({
+            analysisRunId: this.config.analysisRunId,
+            type: "snapshot-write",
+            content: { commitSha: context.currentSha },
+          });
         } catch (err) {
           orchLog.warn(
             { err: err instanceof Error ? err.message : String(err) },
@@ -351,6 +389,16 @@ export class AgentOrchestrator {
 
       // Step 7: Update analysis run status
       await this.updateAnalysisRun("COMPLETED");
+
+      // Polish P4.1 — terminal event.
+      await recordRunEvent({
+        analysisRunId: this.config.analysisRunId,
+        type: "run-complete",
+        content: {
+          durationMs: Date.now() - this.startTime,
+          documentsGenerated: this.results.filter((r) => r.status === "success").length,
+        },
+      });
 
       // Step 8: Send completion notification
       const duration = Date.now() - this.startTime;
@@ -367,10 +415,23 @@ export class AgentOrchestrator {
 
       return this.results;
     } catch (error) {
-      console.error("Orchestrator error:", error);
-      
-      // Update analysis run as failed
-      await this.updateAnalysisRun("FAILED", error instanceof Error ? error.message : "Unknown error");
+      orchLog.error(
+        { err: error instanceof Error ? error.message : String(error), analysisRunId: this.config.analysisRunId },
+        "orchestrator error"
+      );
+
+      // Polish P4.1 — terminal failure event before we touch the DB
+      // (a DB-side failure must not eat the timeline).
+      await recordRunEvent({
+        analysisRunId: this.config.analysisRunId,
+        type: "run-failed",
+        content: { message: error instanceof Error ? error.message : String(error) },
+      });
+
+      // Update analysis run as failed (best-effort; janitor sweeps on DB outage).
+      await this.updateAnalysisRun("FAILED", error instanceof Error ? error.message : "Unknown error").catch((err) => {
+        orchLog.warn({ err: err instanceof Error ? err.message : String(err) }, "FAILED update itself failed");
+      });
 
       // Send error notification
       if (this.onComplete && this.repository) {

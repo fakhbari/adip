@@ -18,6 +18,17 @@ import type { AgentType, WSAnalysisCompleteMessage, WSProgressMessage } from "..
 import { db } from "../src/lib/db";
 import { logger } from "../src/lib/logger";
 import { fanoutScheduledScan, reconcileSchedules, type ScheduleJobPayload } from "../src/lib/scheduler/reconciler";
+import { assertEncryptionKey } from "../src/lib/crypto";
+
+// Polish P3.6 — fail-fast on boot if the encryption key is missing.
+// Without this, the first analysis crashes mid-run on decryptOptional.
+try {
+  assertEncryptionKey();
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error("[worker] ADIP_ENCRYPTION_KEY missing or malformed; refusing to start.");
+  process.exit(1);
+}
 
 const log = logger("worker");
 
@@ -71,15 +82,29 @@ async function handleJob(payload: AnalysisJobPayload): Promise<void> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error({ analysisRunId, err: message }, "analysis failed");
-    await db.analysisRun.update({
-      where: { id: analysisRunId },
-      data: {
-        status: "FAILED",
-        completedAt: new Date(),
-        errors: JSON.stringify([message]),
-      },
-    });
-    await notify("error", { analysisRunId, repositoryId, error: message });
+    // Polish P3.4 — reorder + isolate side effects so a DB outage
+    // during the FAILED write cannot eat the original error.
+    // Each side effect is best-effort; the original error is always
+    // re-thrown for BullMQ retry accounting.
+    try {
+      await db.analysisRun.update({
+        where: { id: analysisRunId },
+        data: { status: "FAILED", completedAt: new Date(), errors: JSON.stringify([message]) },
+      });
+    } catch (dbErr) {
+      log.warn(
+        { analysisRunId, err: dbErr instanceof Error ? dbErr.message : String(dbErr) },
+        "FAILED update itself failed — janitor will sweep"
+      );
+    }
+    try {
+      await notify("error", { analysisRunId, repositoryId, error: message });
+    } catch (nErr) {
+      log.warn(
+        { analysisRunId, err: nErr instanceof Error ? nErr.message : String(nErr) },
+        "WS error notify failed"
+      );
+    }
     throw err; // surface to BullMQ for retry accounting
   }
 }

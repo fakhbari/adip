@@ -106,12 +106,21 @@ export class GitLabClient implements VCSClient {
       );
       const data = await response.json();
 
-      if (data.encoding === "base64" && data.content) {
-        return Buffer.from(data.content, "base64").toString("utf-8");
+      // Polish P3.5 — base64 decode in its own try/catch so a malformed
+      // payload from GitLab does not lose the whole file silently as a
+      // generic catch hit.
+      if (data.encoding === "base64" && typeof data.content === "string") {
+        try {
+          return Buffer.from(data.content, "base64").toString("utf-8");
+        } catch (decodeErr) {
+          // eslint-disable-next-line no-console
+          console.warn(`gitlab-client: failed to decode base64 for ${path}:`, decodeErr);
+          return null;
+        }
       }
 
-      return data.content;
-    } catch (error) {
+      return typeof data.content === "string" ? data.content : null;
+    } catch {
       return null;
     }
   }

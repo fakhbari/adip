@@ -38,3 +38,20 @@ export interface EmbedResult {
   embeddings: number[][];
   usage: { totalTokens: number };
 }
+
+/**
+ * Polish P4.2 — streaming chat delta. Emitted from `LLMProvider.stream()`
+ * for callers that want to forward chunks to the UI (live log page) or
+ * persist them as `llm-delta` RunEvents.
+ *
+ *   - `delta` is the text fragment for this chunk.
+ *   - `finish` is set only on the LAST event of a stream.
+ *   - `usage` is populated on the final frame when the provider supplies it
+ *     (OpenAI does when `stream_options.include_usage: true`; Anthropic
+ *     emits a `message_delta` with usage; Ollama emits on the `done` row).
+ */
+export interface ChatDelta {
+  delta: string;
+  finish?: ChatResult["finishReason"];
+  usage?: Partial<TokenUsage>;
+}

@@ -4,6 +4,7 @@
 
 import type { LLMProvider } from "./provider";
 import type {
+  ChatDelta,
   ChatMessage,
   ChatOptions,
   ChatResult,
@@ -12,6 +13,7 @@ import type {
   TokenUsage,
 } from "./types";
 import { recordUsage } from "./usage-tracker";
+import { iterateSSE } from "./stream-parsers";
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
@@ -84,6 +86,71 @@ export class OpenAIProvider implements LLMProvider {
       usage,
       finishReason: (data.choices[0]?.finish_reason as ChatResult["finishReason"]) ?? "unknown",
     };
+  }
+
+  /**
+   * Polish P4.2 — streaming chat. SSE on /chat/completions with
+   * `stream:true`. `stream_options.include_usage:true` makes the
+   * final frame carry token usage so we can still record LLMUsage.
+   */
+  async *stream(messages: ChatMessage[], opts?: ChatOptions): AsyncGenerator<ChatDelta> {
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        max_tokens: opts?.maxTokens ?? this.defaultMaxTokens,
+        temperature: opts?.temperature ?? this.defaultTemperature,
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`OpenAI stream ${res.status}: ${detail.slice(0, 500)}`);
+    }
+
+    let totalUsage: TokenUsage | undefined;
+
+    for await (const frame of iterateSSE(res)) {
+      const choice = (frame.choices as Array<{
+        delta?: { content?: string };
+        finish_reason?: string;
+      }>)?.[0];
+      if (choice?.delta?.content) {
+        yield { delta: choice.delta.content };
+      }
+      if (choice?.finish_reason) {
+        // Wait — final usage frame may follow with empty choices but a
+        // populated `usage` field. Don't yield finish here yet; we
+        // surface it on the very last frame below.
+      }
+      if (frame.usage) {
+        const u = frame.usage as { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+        totalUsage = {
+          promptTokens: u.prompt_tokens,
+          completionTokens: u.completion_tokens,
+          totalTokens: u.total_tokens,
+        };
+      }
+    }
+
+    if (totalUsage) {
+      await recordUsage({
+        provider: this.kind,
+        model: this.model,
+        usage: totalUsage,
+        analysisRunId: opts?.meta?.analysisRunId as string | undefined,
+        repositoryId: opts?.meta?.repositoryId as string | undefined,
+        agentType: opts?.meta?.agentType as string | undefined,
+      });
+    }
+    yield { delta: "", finish: "stop", usage: totalUsage };
   }
 
   async embed(texts: string[], _opts?: EmbedOptions): Promise<EmbedResult> {

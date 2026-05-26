@@ -4,7 +4,7 @@
 // vllm.ts). The factory in src/lib/llm/index.ts picks one based on
 // the AIProvider DB row that the orchestrator resolves at boot.
 
-import type { ChatMessage, ChatOptions, ChatResult, EmbedOptions, EmbedResult } from "./types";
+import type { ChatDelta, ChatMessage, ChatOptions, ChatResult, EmbedOptions, EmbedResult } from "./types";
 
 export interface LLMProvider {
   /** Provider key — "anthropic" | "openai" | "ollama" | "vllm". */
@@ -13,6 +13,15 @@ export interface LLMProvider {
   readonly model: string;
 
   chat(messages: ChatMessage[], opts?: ChatOptions): Promise<ChatResult>;
+
+  /**
+   * Polish P4.2 — streaming. Yields ChatDelta frames as the model
+   * produces them. The LAST frame carries `finish` + (optionally)
+   * `usage`. Adapters that have not been migrated yet leave this
+   * undefined; the runWithSchema helper falls back to chat() in that
+   * case. Implementing it is a per-adapter cut.
+   */
+  stream?(messages: ChatMessage[], opts?: ChatOptions): AsyncIterable<ChatDelta>;
 
   /** Optional — only required when the agent uses RAG. */
   embed?(texts: string[], opts?: EmbedOptions): Promise<EmbedResult>;

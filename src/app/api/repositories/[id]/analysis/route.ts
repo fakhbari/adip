@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { runAnalysis, AnalysisAlreadyRunningError } from "@/lib/agents/orchestrator";
+import { AnalysisAlreadyRunningError } from "@/lib/agents/orchestrator";
+import { enqueueAnalysis } from "@/lib/queue";
 import { requireTenant, assertOwnership } from "@/lib/tenant";
-import {
-  WSProgressMessage,
-  WSAnalysisCompleteMessage,
-  AgentType,
-} from "@/lib/agents/types";
+import { AgentType } from "@/lib/agents/types";
 
 // WebSocket notification helper.
 // Talks server-to-server to the mini-service. The previous `?XTransformPort=3003`
@@ -125,23 +122,20 @@ export async function POST(
     }
 
     try {
-      const { analysisRunId } = await runAnalysis({
+      // Phase 1.1: producer-side enqueue. The worker (scripts/worker.ts)
+      // pulls the job and wires WS callbacks itself.
+      const { analysisRunId, jobId } = await enqueueAnalysis({
         repositoryId: id,
         triggeredBy,
         enabledAgents: enabledAgents as AgentType[] | undefined,
-        onProgress: async (progress: WSProgressMessage) => {
-          await sendWsNotification("progress", progress);
-        },
-        onComplete: async (complete: WSAnalysisCompleteMessage) => {
-          await sendWsNotification("complete", complete);
-        },
       });
 
       return NextResponse.json({
         success: true,
         analysisRunId,
-        status: "RUNNING",
-        message: "Analysis started. Connect to WebSocket for real-time updates.",
+        jobId,
+        status: "QUEUED",
+        message: "Analysis queued. Connect to WebSocket for real-time updates.",
       });
     } catch (err) {
       if (err instanceof AnalysisAlreadyRunningError) {

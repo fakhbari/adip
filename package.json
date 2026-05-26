@@ -17,7 +17,8 @@
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "secrets:migrate": "tsx scripts/migrate-encrypt-secrets.ts",
-    "seed:admin": "tsx scripts/seed-admin.ts"
+    "seed:admin": "tsx scripts/seed-admin.ts",
+    "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -58,6 +59,7 @@
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.77.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -66,6 +68,7 @@
     "framer-motion": "^12.23.2",
     "html2canvas": "^1.4.1",
     "input-otp": "^1.4.2",
+    "ioredis": "^5.11.0",
     "jspdf": "^4.2.0",
     "lucide-react": "^0.525.0",
     "next": "^16.1.1",

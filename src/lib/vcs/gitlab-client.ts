@@ -186,6 +186,22 @@ export class GitLabClient implements VCSClient {
     }));
   }
 
+  /** Phase 1.4 — list paths that changed between two commits. */
+  async getDiff(owner: string, repo: string, fromSha: string, toSha: string): Promise<string[]> {
+    const projectPath = this.encodeProjectPath(owner, repo);
+    const response = await this.request(
+      `/projects/${projectPath}/repository/compare?from=${fromSha}&to=${toSha}`
+    );
+    const data = await response.json();
+    const diffs = (data.diffs ?? []) as Array<{ new_path?: string; old_path?: string }>;
+    const paths = new Set<string>();
+    for (const d of diffs) {
+      if (d.new_path) paths.add(d.new_path);
+      else if (d.old_path) paths.add(d.old_path);
+    }
+    return [...paths];
+  }
+
   // Helper: Get full tree recursively.
   //
   // Phase 1.2: GitLab's `/repository/tree` paginates at `per_page=100`

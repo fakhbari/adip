@@ -194,6 +194,14 @@ export class GitHubClient implements VCSClient {
     }));
   }
 
+  /** Phase 1.4 — list paths that changed between two commits. */
+  async getDiff(owner: string, repo: string, fromSha: string, toSha: string): Promise<string[]> {
+    const response = await this.request(`/repos/${owner}/${repo}/compare/${fromSha}...${toSha}`);
+    const data = await response.json();
+    const files = (data.files ?? []) as Array<{ filename: string }>;
+    return files.map((f) => f.filename);
+  }
+
   // Helper: Get full tree recursively.
   //
   // Phase 1.2: GitHub's `/git/trees/{sha}?recursive=1` returns at most

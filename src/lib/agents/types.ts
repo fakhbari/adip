@@ -52,6 +52,12 @@ export interface AnalysisContext {
   aiProvider: AIProvider;
   fileContents: Map<string, string>;  // Cached file contents
   fileTree: FileInfo[];               // Repository file tree
+  // Phase 1.4 — populated when this is an incremental analysis. Agents
+  // can inspect the set to decide whether their output is still valid
+  // (skip if their inputs are unchanged). Undefined for full scans.
+  incrementalScope?: Set<string>;
+  // The commit SHA we are analysing, useful for snapshot writeback.
+  currentSha?: string;
 }
 
 export interface FileInfo {

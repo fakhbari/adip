@@ -220,6 +220,40 @@ export class AgentOrchestrator {
         timestamp: new Date(),
       });
 
+      // Phase 1.4: incremental analysis scope. If we have a previous
+      // snapshot for this repo, ask the VCS client for the diff and
+      // expose the changed-path set on the context. Agents can opt-in to
+      // skip work whose inputs are unchanged. Best-effort — failures
+      // leave the scope undefined and the analysis runs as a full scan.
+      let incrementalScope: Set<string> | undefined;
+      let currentSha: string | undefined;
+      try {
+        const prev = await db.repoSnapshot.findFirst({
+          where: { repositoryId: this.config.repositoryId },
+          orderBy: { takenAt: "desc" },
+        });
+        const branches = await this.vcsClient!.getBranches(this.vcsOwner!, this.vcsRepo!);
+        currentSha = branches.find((b) => b.isDefault)?.sha ?? branches[0]?.sha;
+        if (prev && currentSha && prev.commitSha !== currentSha && this.vcsClient?.getDiff) {
+          const changed = await this.vcsClient.getDiff(
+            this.vcsOwner!,
+            this.vcsRepo!,
+            prev.commitSha,
+            currentSha
+          );
+          incrementalScope = new Set(changed);
+          orchLog.info(
+            { changed: changed.length, prevSha: prev.commitSha, currSha: currentSha },
+            "incremental scope computed"
+          );
+        }
+      } catch (err) {
+        orchLog.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          "incremental scope computation failed; falling back to full scan"
+        );
+      }
+
       // Step 4: Build analysis context
       const context: AnalysisContext = {
         repository: this.repository!,
@@ -231,6 +265,8 @@ export class AgentOrchestrator {
           path,
           type: "file" as const,
         })),
+        incrementalScope,
+        currentSha,
       };
 
       // Step 5: Run agents in sequence
@@ -269,6 +305,21 @@ export class AgentOrchestrator {
         message: "Saving results to database...",
         timestamp: new Date(),
       });
+
+      // Phase 1.4: record the snapshot so the next analysis can diff
+      // against it. Best-effort — a failure here does not fail the run.
+      if (context.currentSha) {
+        try {
+          await db.repoSnapshot.create({
+            data: { repositoryId: this.config.repositoryId, commitSha: context.currentSha },
+          });
+        } catch (err) {
+          orchLog.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            "snapshot write failed"
+          );
+        }
+      }
 
       // Step 7: Update analysis run status
       await this.updateAnalysisRun("COMPLETED");

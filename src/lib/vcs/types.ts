@@ -51,17 +51,22 @@ export interface VCSClient {
   // Repository operations
   getRepository(owner: string, repo: string): Promise<VCSRepository>;
   getBranches(owner: string, repo: string): Promise<VCSBranch[]>;
-  
+
   // File operations
   getFileTree(owner: string, repo: string, branch: string, path?: string): Promise<VCSFile[]>;
   getFileContent(owner: string, repo: string, branch: string, path: string): Promise<string | null>;
   getMultipleFiles(owner: string, repo: string, branch: string, paths: string[]): Promise<Map<string, string>>;
-  
+
   // Search
   searchFiles(owner: string, repo: string, branch: string, pattern: string): Promise<VCSFile[]>;
-  
+
   // Commits
   getRecentCommits(owner: string, repo: string, branch: string, limit?: number): Promise<VCSCommit[]>;
+
+  // Phase 1.4 — incremental analysis: return the list of file paths
+  // that changed between two commits. Optional on the interface so
+  // legacy mocks compile; implementations should provide it.
+  getDiff?(owner: string, repo: string, fromSha: string, toSha: string): Promise<string[]>;
 }
 
 // Configuration for file patterns to analyze

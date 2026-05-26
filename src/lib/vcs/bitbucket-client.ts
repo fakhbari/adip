@@ -162,6 +162,28 @@ export class BitbucketClient implements VCSClient {
     return tree.filter(file => regex.test(file.path));
   }
 
+  /** Phase 1.4 — list paths that changed between two commits. */
+  async getDiff(owner: string, repo: string, fromSha: string, toSha: string): Promise<string[]> {
+    // Bitbucket's diffstat endpoint returns one entry per changed file.
+    // Paginates via `next` URL.
+    const paths = new Set<string>();
+    let next: string | null = `/repositories/${owner}/${repo}/diffstat/${toSha}..${fromSha}`;
+    let guard = 0;
+    while (next && guard++ < 200) {
+      const response = await this.request(next);
+      const data = await response.json();
+      for (const v of data.values ?? []) {
+        if (v.new?.path) paths.add(v.new.path);
+        else if (v.old?.path) paths.add(v.old.path);
+      }
+      next = data.next ?? null;
+      if (next && next.startsWith(this.baseUrl)) {
+        next = next.slice(this.baseUrl.length);
+      }
+    }
+    return [...paths];
+  }
+
   async getRecentCommits(
     owner: string,
     repo: string,

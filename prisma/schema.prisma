@@ -248,6 +248,19 @@ enum RunStatus {
   CANCELLED
 }
 
+// Phase 1.4: snapshot of a repository's tree state at a particular commit.
+// The orchestrator looks up the most recent snapshot for the repo, asks
+// the VCS client for the diff between then and now, and gives each agent
+// the changed path set so they can decide whether to re-run.
+model RepoSnapshot {
+  id            String   @id @default(cuid())
+  repositoryId  String
+  commitSha     String
+  takenAt       DateTime @default(now())
+
+  @@index([repositoryId, takenAt])
+}
+
 model AnalysisRun {
   id             String   @id @default(cuid())
   repositoryId   String

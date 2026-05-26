@@ -15,11 +15,15 @@ const BIND_HOST = process.env.ADIP_WS_BIND_HOST ?? "127.0.0.1";
 const PUBLIC_ORIGIN = process.env.ADIP_PUBLIC_ORIGIN ?? "http://localhost:3000";
 const INTERNAL_TOKEN = process.env.ADIP_INTERNAL_TOKEN ?? "";
 
+// Polish P3.6 — refuse to start without the internal token. Was a
+// warn-and-continue which left /notify/* in a half-broken state.
 if (!INTERNAL_TOKEN) {
-  console.warn(
-    "[analysis-ws] ADIP_INTERNAL_TOKEN is not set. /notify/* will be rejected. " +
+  // eslint-disable-next-line no-console
+  console.error(
+    "[analysis-ws] ADIP_INTERNAL_TOKEN is required. Refusing to start. " +
       "Set it in the environment and restart."
   );
+  process.exit(1);
 }
 
 const httpServer = createServer();

@@ -4,111 +4,201 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-ADIP (ArchDoc Intelligence Platform) — a Next.js 16 app that connects to git repositories,
-analyzes them with a multi-agent pipeline, and auto-generates architecture documentation:
-Technology Radar, C4 models, ADRs, OpenAPI specs, and DDD Context Maps.
+ADIP (ArchDoc Intelligence Platform) — a Next.js 16 / Postgres / Redis / BullMQ
+application that ingests git repositories and auto-generates SAW_102-conformant
+architecture documentation: C4, ADR, OpenAPI, AsyncAPI, Context Map, Data
+Catalog, plus a Technology Radar with ThoughtWorks gap analysis. Outputs are
+rendered in Persian by default. The vision document is `upload/ADIP-Proposal-v1.0.md`.
 
 ## Runtime & commands
 
-Runtime is **Bun**, not Node. The package manager is `bun`.
+Runtime is **Node + npm** (Bun was dropped in the hardening phase). Local dev
+infra is brought up by docker-compose. See `RUNBOOK.md` for the full ops manual.
 
 ```bash
-bun install
-bun run dev          # Next.js dev server on port 3000 (tees to dev.log)
-bun run build        # next build + copies .next/static & public into .next/standalone
-bun start            # runs the standalone production server
-bun run lint         # eslint
+# End-to-end: docker stack + deps + migrations + admin seed + build + start.
+./scripts/bootstrap.sh
 
-bun run db:push      # apply prisma schema to the SQLite db (no migration files)
-bun run db:generate  # regenerate Prisma client
-bun run db:migrate   # create + apply a dev migration
-bun run db:reset     # drop and recreate the db
+# Day-to-day
+npm run dev                  # Next.js on :3000
+npm run worker               # BullMQ consumer (run multiple replicas for 10× parallelism)
+npm run build && npm start   # standalone production server
 
-bun test                              # run all tests in __tests__/ (bun:test)
-bun test __tests__/api.test.ts        # run one test file
+npm run lint
+npm run typecheck
+npm test                     # vitest, unit suite
+npm run test:integration     # ADIP_INTEGRATION=1 + a running stack
+npm run check                # lint + typecheck + unit tests
+
+npm run db:migrate           # prisma migrate dev
+npm run db:push              # quick schema push (dev only)
+npm run secrets:migrate      # encrypt any plaintext accessToken / apiKey in DB
+npm run seed:admin           # idempotent admin user upsert
 ```
 
-The API test files (`api.test.ts`, `additional-api.test.ts`) hit `http://localhost:3000`,
-so the dev server must be running before `bun test`. `dashboard-utils.test.ts` is pure-unit.
+`docker compose up -d` brings up Postgres (`pgvector/pgvector:pg16`) on **:5433**
+and Redis on **:6380** — non-default ports so they do not collide with anything
+the developer already runs.
 
-The WebSocket mini-service is started separately (`bun run dev` in `mini-services/analysis-ws/`,
-or use `.zscripts/dev.sh` which launches both). Analysis progress will not appear without it.
+## Architecture (high level)
 
-## Build will not catch type/lint errors
+```
+Browser → Next.js (UI + API + NextAuth middleware + queue producer)
+              │
+              ▼  enqueue
+         Redis (BullMQ)
+              │  pull
+              ▼
+       adip-worker (Node × N) — AgentOrchestrator + LLM adapter + WS notify
+              │
+              ▼
+       Postgres + pgvector ← audit / state / embeddings
+              │
+              ▼
+       analysis-ws (socket.io :3003, bearer-authed /notify/*, 200ms coalesce)
+```
 
-`next.config.ts` sets `typescript.ignoreBuildErrors: true` and `reactStrictMode: false`.
-`eslint.config.mjs` disables almost every rule (including `no-unused-vars`, `no-explicit-any`).
-A passing build/lint says little — verify changes by running them. Path alias: `@/*` → `./src/*`.
+Optional Python sidecar (`adip-graph/`) for vLLM/LangGraph — only built when a
+tenant configures `AIProvider.type = CUSTOM` pointed at vLLM.
+
+## Architecture (where things live)
+
+### Routes
+
+`src/app/<view>/page.tsx` — eight App Router pages: `/dashboard`, `/repositories`,
+`/radar`, `/adr`, `/c4`, `/openapi`, `/context-map`, `/settings`. Root `/` redirects
+to `/dashboard`. `/auth/signin`, `/auth/signout` are public; everything else is
+gated by `src/middleware.ts`. `/api/**` is gated except `/api`, `/api/metrics`,
+`/api/auth/**`.
+
+### API
+
+`src/app/api/**/route.ts`. Every handler that touches a tenant-scoped resource
+calls `requireTenant(request)` from `src/lib/tenant.ts` first and threads the
+tenantId into Prisma via `withTenant(where, ctx)` or `assertOwnership(row, ctx)`.
+
+### Multi-agent pipeline
+
+`src/lib/agents/`. `BaseAgent` provides timeout-wrapped `execute()`, progress
+callbacks, public `getType()/getName()/getPriority()` accessors. Seven concrete
+agents: `TechRadarAgent`, `C4Agent`, `ADRAgent`, `OpenAPIAgent`, `AsyncAPIAgent`,
+`DataCatalogAgent`, `ContextMapAgent`. The orchestrator (`orchestrator.ts`):
+
+1. Loads repository + AIProvider, **decrypts** `accessToken` and `apiKey`.
+2. Builds a VCS client and fetches the file tree (paginated + truncation-safe).
+3. Fetches filtered files into a `RepoFileCache` (256MB / 1MB per-file budget).
+4. Computes `incrementalScope` by diffing against the previous `RepoSnapshot`.
+5. Builds the `LLMProvider` adapter (Anthropic / OpenAI / Ollama / vLLM).
+6. Runs agents sequentially by `priority`; per-agent timeout, hard 15-min wall-clock.
+7. Persists results in a single `db.$transaction`; appends versioned `Document`
+   rows; updates `RepoSnapshot`.
+
+The orchestrator is invoked from `scripts/worker.ts` (BullMQ consumer), not
+inline. The Next.js POST `/api/repositories/[id]/analysis` is now a producer that
+calls `enqueueAnalysis(...)` and returns 202-style immediately.
+
+### LLM layer
+
+`src/lib/llm/`:
+
+- `provider.ts` interface, `anthropic.ts` / `openai.ts` / `ollama.ts` / `vllm.ts`
+  implementations, `index.ts` factory.
+- `prompt-registry.ts` reads `prompts/<agent>/<task>.<locale>.md` with a tiny
+  `{{var}}` interpolator. EN + FA shipped for every template.
+- `structured.ts` wraps `provider.chat()` with fence-stripping JSON extraction,
+  Zod schema validation, and up-to-3 re-prompts on malformed output.
+- `usage-tracker.ts` writes `LLMUsage` rows + Prom counters.
+- `tools.ts` ToolRegistry scaffold (per-agent tool bindings land case-by-case).
+
+### RAG
+
+`src/lib/rag/`: windowed `chunker.ts` (sha1-hashed chunks) + `InMemoryRetriever`
+that embeds via the provider adapter. Persistent pgvector storage is a
+Phase 2.3b follow-up; in-memory is fine for the analysis lifetime.
+
+### VCS
+
+`src/lib/vcs/`: GitHub / GitLab / Bitbucket clients. All three share
+`fetch-with-retry.ts` (exponential backoff + Retry-After). All three implement
+`getFullTree` with pagination + truncation handling and `getDiff(from, to)` for
+incremental analysis.
+
+### Persian / i18n
+
+`src/lib/i18n/locale-renderer.ts` translates Document content at the sink stage.
+`mermaid-fa.ts` injects `&lrm;` (U+200E) between Mermaid syntax and Persian
+labels to avoid RTL collapse.
+
+### Crypto / secrets
+
+`src/lib/crypto.ts`: AES-256-GCM with `v1:` prefix. `encryptOptional` /
+`decryptOptional` used at every secret-touching site. Key from
+`ADIP_ENCRYPTION_KEY` (32 bytes hex or base64). One-shot migration script
+at `scripts/migrate-encrypt-secrets.ts`.
+
+### Observability
+
+`src/lib/logger.ts` Pino root + child factory; redacts `accessToken` / `apiKey` /
+`password` / `x-internal-token` automatically. `src/lib/metrics.ts` registers
+`adip_analysis_runs_total`, `adip_llm_tokens_total`, `adip_vcs_request_seconds`,
+`adip_queue_jobs_active`, `adip_agent_duration_seconds`. `/api/metrics` exposes
+the registry in Prometheus format.
+
+### Scheduler
+
+`src/lib/scheduler/reconciler.ts`: every 5 minutes the worker syncs DB
+`ScheduleConfig` rows to BullMQ `repeat` jobs. The handler fans out per-repo
+`analyze-repo` jobs into the main queue.
+
+### WS notifier
+
+`mini-services/analysis-ws/index.ts`: socket.io on :3003. `/notify/*` requires
+`X-Internal-Token` (`ADIP_INTERNAL_TOKEN`). Progress events are coalesced into
+one emit per 200 ms per `analysisRunId`; complete/error events flush + emit
+immediately.
 
 ## Database
 
-SQLite via Prisma (`prisma/schema.prisma`, ~14 models). The schema uses no relational
-features SQLite lacks; JSON-shaped fields (languages, frameworks, relationships, metadata,
-errors) are stored as `String` columns holding `JSON.stringify`'d values — parse on read.
-Connection is `DATABASE_URL` (a `file:` URL); no `.env` is committed. `src/lib/db.ts`
-exports a singleton `db` (global-cached in non-production).
+Postgres 16 + `pgvector` extension via `pgvector/pgvector:pg16`. Prisma manages
+the schema. Migrations live in `prisma/migrations/`. Run
+`prisma migrate deploy` in prod, `prisma migrate dev` in dev.
 
-## Architecture
+JSON-shaped String columns (`Repository.languages` / `frameworks`,
+`Document.metadata`, etc.) stay as `String?` for now; parse via
+`src/lib/repo-fields.ts` helpers, never inline.
 
-### Frontend is a single client page
+## Required env vars
 
-`src/app/page.tsx` is one `"use client"` component holding an `activeView` state string.
-It swaps between 8 feature components (dashboard, repositories, radar, adr, c4, openapi,
-context-map, settings) — there is **no per-page routing**. Navigation is the sidebar in
-`src/components/layout/dashboard-layout.tsx`. Each feature page lives under
-`src/components/<feature>/` and fetches from its matching API route.
+See `.env.example`. Key ones:
 
-### API routes
+- `DATABASE_URL` — Postgres URL.
+- `REDIS_URL` — for BullMQ.
+- `ADIP_ENCRYPTION_KEY` — 32-byte hex/base64. Loss = data unrecoverable.
+- `ADIP_INTERNAL_TOKEN` — shared between Next.js host and WS service.
+- `ADIP_PUBLIC_ORIGIN` — CORS for WS.
+- `NEXTAUTH_SECRET`, `NEXTAUTH_URL` — NextAuth.
+- `ADIP_ADMIN_EMAIL`, `ADIP_ADMIN_PASSWORD` — for `seed:admin`.
 
-`src/app/api/**/route.ts` — one route group per feature, plus
-`repositories/[id]/analysis/` (start/cancel/list analysis runs). Standard Next.js
-App Router handlers; dynamic `params` are a Promise (`await params`).
+## Strict TypeScript + ESLint
 
-### Multi-agent analysis pipeline (`src/lib/agents/`)
+`next.config.ts` has `ignoreBuildErrors: false` and `reactStrictMode: true`.
+ESLint defaults from `eslint-config-next` are restored; `no-explicit-any` is a
+warning (not an error) because the codebase still has legacy `any` sites in
+agent payload boundaries. Path alias: `@/*` → `./src/*`.
 
-The core of the app. An analysis is run by `AgentOrchestrator` (`orchestrator.ts`):
+## Where to look first
 
-1. Loads repository + AI provider context from the DB.
-2. Builds a VCS client and fetches a filtered file set (dependency/config/ADR/API/docs
-   files always; source files sampled, max 50).
-3. Runs each enabled agent **sequentially**, ordered by `priority`.
-4. Persists each agent's result back into the DB (`Technology`, `RadarItem`, `Document`,
-   `ADR`, …) and updates the `AnalysisRun` row.
+- Want to add an agent → `src/lib/agents/<name>-agent.ts` + register in
+  `orchestrator.ts agentConstructors` + add `createAgentConfig` entry + add
+  `prompts/<name>/<task>.{en,fa}.md`.
+- Want to add an LLM provider → `src/lib/llm/<name>.ts` + factory branch in
+  `src/lib/llm/index.ts` + Prisma `AIProviderType` enum.
+- Want to add a route → place under `src/app/api/...`. First line of the handler
+  must be `const ctx = await requireTenant(request); if (ctx instanceof NextResponse) return ctx;`.
 
-Agents extend `BaseAgent` (`base-agent.ts`): it provides timeout-wrapped `execute()`,
-progress reporting, and file helpers; subclasses implement `analyze()`. Concrete agents:
-`TechRadarAgent`, `C4Agent`, `ADRAgent`, `OpenAPIAgent` (`asyncapi` reuses `OpenAPIAgent`).
-Agent registration and default priority/timeout live in `createAgentConfig()`.
+## Plan + Runbook
 
-Entry points: `runAnalysis()` (helper) and `POST /api/repositories/[id]/analysis`.
-Both kick off `orchestrator.execute()` **without awaiting it** — analysis runs in the
-background and reports via WebSocket.
+The 23-phase Completion Plan that took ADIP from MVP to current state lives at
+`/home/<user>/.claude/plans/review-all-codes-improve-adaptive-truffle.md`.
 
-### VCS layer (`src/lib/vcs/`)
-
-`createVCSClient()` / `createPublicVCSClient()` build a `GitHubClient`, `GitLabClient`,
-or `BitbucketClient` from a connection record (or for an unauthenticated public repo).
-All implement the `VCSClient` interface. `parseRepositoryUrl()` extracts owner/repo from
-a URL; `FILE_PATTERNS` defines which files the orchestrator fetches.
-
-### Real-time progress (WebSocket)
-
-`mini-services/analysis-ws/index.ts` is a standalone socket.io server on **port 3003**,
-separate from Next.js. The orchestrator pushes progress to it via HTTP
-`POST localhost:3003/notify/{progress|complete|error}`. The browser connects through the
-Caddy gateway path `/?XTransformPort=3003` — see `src/hooks/use-analysis-websocket.ts`,
-which also starts the analysis via the REST API. Do not change the socket.io `path: '/'`.
-
-### AI provider integration
-
-AI calls use the `z-ai-web-dev-sdk` (`ZAI.create()`), e.g. `api/adr/ai-generate/route.ts`.
-The `AIProvider` DB model stores per-repo or default provider config; analysis resolves
-the repository's provider or falls back to the `isDefault` one.
-
-## Deployment scripts (`.zscripts/`)
-
-These target the Z.ai cloud build environment and **hardcode the path `/home/z/my-project`** —
-they will not run as-is locally. `build.sh` builds Next.js standalone + bundles each
-`mini-services/*` with `bun build`, then tars everything; `start.sh` launches the standalone
-server, the mini-services, and Caddy. `Caddyfile` reverse-proxies `:81` → `:3000` (and to an
-arbitrary port via the `XTransformPort` query param, used for the WebSocket service).
+Day-to-day operations procedures live in `RUNBOOK.md`.

@@ -1,141 +1,134 @@
-# 🚀 Welcome to Z.ai Code Scaffold
+# ADIP — ArchDoc Intelligence Platform
 
-A modern, production-ready web application scaffold powered by cutting-edge technologies, designed to accelerate your development with [Z.ai](https://chat.z.ai)'s AI-powered coding assistance.
+AI-driven architecture documentation for the enterprise. ADIP connects to your
+Bitbucket / GitLab / GitHub repositories, runs a multi-agent analysis pipeline,
+and produces SAW_102-conformant documents:
 
-## ✨ Technology Stack
+- **C4** (System Context + Containers) with Mermaid diagrams
+- **ADRs** in MADR format (drafted from git history + dependency churn)
+- **OpenAPI** + **AsyncAPI** specifications synthesised from source
+- **Context Maps** with DDD pattern classification (OHS / ACL / etc.)
+- **Data Catalog** ERD + dictionary from migrations and ORM models
+- **Technology Radar** with live ThoughtWorks gap analysis
 
-This scaffold provides a robust foundation built with:
+Output is rendered in Persian (Farsi) by default; English is a per-repository
+override. Documents land in the ADIP dashboard with full version history; no
+PRs are opened against source repos (dashboard is the single sink).
 
-### 🎯 Core Framework
-- **⚡ Next.js 16** - The React framework for production with App Router
-- **📘 TypeScript 5** - Type-safe JavaScript for better developer experience
-- **🎨 Tailwind CSS 4** - Utility-first CSS framework for rapid UI development
+The full design is in [`upload/ADIP-Proposal-v1.0.md`](upload/ADIP-Proposal-v1.0.md).
 
-### 🧩 UI Components & Styling
-- **🧩 shadcn/ui** - High-quality, accessible components built on Radix UI
-- **🎯 Lucide React** - Beautiful & consistent icon library
-- **🌈 Framer Motion** - Production-ready motion library for React
-- **🎨 Next Themes** - Perfect dark mode in 2 lines of code
+## Stack
 
-### 📋 Forms & Validation
-- **🎣 React Hook Form** - Performant forms with easy validation
-- **✅ Zod** - TypeScript-first schema validation
+| Layer        | Technology |
+|--------------|------------|
+| App          | Next.js 16 (App Router) + TypeScript + Tailwind + shadcn/ui |
+| Auth         | NextAuth.js (Credentials provider; GitHub OAuth ready) |
+| State        | Postgres 16 + pgvector + Prisma |
+| Queue        | Redis + BullMQ |
+| Worker       | Separate Node process via `npm run worker`, scales horizontally |
+| WS notifier  | socket.io mini-service on `:3003`, bearer-authed `/notify/*` |
+| LLM          | Provider adapter (Anthropic, OpenAI, Ollama, vLLM) |
+| RAG          | pgvector + in-memory retriever |
+| Observability| Pino structured logs + Prometheus `/api/metrics` |
+| Optional     | Python sidecar (`adip-graph/`) for vLLM + LangGraph |
 
-### 🔄 State Management & Data Fetching
-- **🐻 Zustand** - Simple, scalable state management
-- **🔄 TanStack Query** - Powerful data synchronization for React
-- **🌐 Fetch** - Promise-based HTTP request
+## Quickstart
 
-### 🗄️ Database & Backend
-- **🗄️ Prisma** - Next-generation TypeScript ORM
-- **🔐 NextAuth.js** - Complete open-source authentication solution
-
-### 🎨 Advanced UI Features
-- **📊 TanStack Table** - Headless UI for building tables and datagrids
-- **🖱️ DND Kit** - Modern drag and drop toolkit for React
-- **📊 Recharts** - Redefined chart library built with React and D3
-- **🖼️ Sharp** - High performance image processing
-
-### 🌍 Internationalization & Utilities
-- **🌍 Next Intl** - Internationalization library for Next.js
-- **📅 Date-fns** - Modern JavaScript date utility library
-- **🪝 ReactUse** - Collection of essential React hooks for modern development
-
-## 🎯 Why This Scaffold?
-
-- **🏎️ Fast Development** - Pre-configured tooling and best practices
-- **🎨 Beautiful UI** - Complete shadcn/ui component library with advanced interactions
-- **🔒 Type Safety** - Full TypeScript configuration with Zod validation
-- **📱 Responsive** - Mobile-first design principles with smooth animations
-- **🗄️ Database Ready** - Prisma ORM configured for rapid backend development
-- **🔐 Auth Included** - NextAuth.js for secure authentication flows
-- **📊 Data Visualization** - Charts, tables, and drag-and-drop functionality
-- **🌍 i18n Ready** - Multi-language support with Next Intl
-- **🚀 Production Ready** - Optimized build and deployment settings
-- **🤖 AI-Friendly** - Structured codebase perfect for AI assistance
-
-## 🚀 Quick Start
+Requirements: Docker, Node ≥ 22, npm.
 
 ```bash
-# Install dependencies
-bun install
-
-# Start development server
-bun run dev
-
-# Build for production
-bun run build
-
-# Start production server
-bun start
+./scripts/bootstrap.sh
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to see your application running.
+The script:
+1. Brings up Postgres + Redis via `docker compose up -d`.
+2. Generates a fresh `.env.local` (32-byte AES key, internal WS token,
+   NextAuth secret).
+3. `npm install` for both the root and the WS mini-service.
+4. Runs `prisma migrate deploy`.
+5. Seeds an admin user (`admin@local` / `admin` by default — change in prod).
+6. Encrypts any pre-existing plaintext secrets in the DB (idempotent).
+7. Builds the Next.js standalone output.
+8. Starts the WS mini-service on `:3003`, the Next.js app on `:3000`.
+9. Waits for both `/api` and `/healthz` to return 200.
 
-## 🤖 Powered by Z.ai
+Sign in at <http://localhost:3000/auth/signin> with the seeded admin user.
 
-This scaffold is optimized for use with [Z.ai](https://chat.z.ai) - your AI assistant for:
+The worker process is not started by `bootstrap.sh` — start it (and as many
+replicas as you want) separately:
 
-- **💻 Code Generation** - Generate components, pages, and features instantly
-- **🎨 UI Development** - Create beautiful interfaces with AI assistance  
-- **🔧 Bug Fixing** - Identify and resolve issues with intelligent suggestions
-- **📝 Documentation** - Auto-generate comprehensive documentation
-- **🚀 Optimization** - Performance improvements and best practices
+```bash
+npm run worker
+# Or for the proposal's "10 parallel workers":
+for i in {1..10}; do npm run worker & done
+```
 
-Ready to build something amazing? Start chatting with Z.ai at [chat.z.ai](https://chat.z.ai) and experience the future of AI-powered development!
+## Documentation
 
-## 📁 Project Structure
+| Document                                            | What for                          |
+|-----------------------------------------------------|-----------------------------------|
+| [`RUNBOOK.md`](RUNBOOK.md)                          | Operations: dev/prod, ops tasks, incident playbooks |
+| [`CLAUDE.md`](CLAUDE.md)                            | Map of the codebase for editors + AI assistants |
+| [`upload/ADIP-Proposal-v1.0.md`](upload/ADIP-Proposal-v1.0.md) | Original vision document (Persian) |
+| [`.env.example`](.env.example)                      | All environment variables, with comments |
+| [`adip-graph/README.md`](adip-graph/README.md)      | Python sidecar (optional, vLLM scenario) |
+
+## Project layout
 
 ```
 src/
-├── app/                 # Next.js App Router pages
-├── components/          # Reusable React components
-│   └── ui/             # shadcn/ui components
-├── hooks/              # Custom React hooks
-└── lib/                # Utility functions and configurations
+├── app/                                # Next.js routes (UI + API)
+│   ├── (8 page routes)/page.tsx        # /dashboard, /repositories, /radar, …
+│   ├── api/                            # REST handlers; all tenant-scoped
+│   └── auth/{signin,signout}/page.tsx
+├── components/
+│   ├── radar/D3Radar.tsx               # D3 radar visualisation
+│   ├── layout/dashboard-layout.tsx     # nav shell (usePathname-driven)
+│   └── ui/…                            # shadcn primitives
+├── lib/
+│   ├── agents/                         # 7 agents + BaseAgent + orchestrator
+│   ├── llm/                            # provider adapter, prompt registry, structured output
+│   ├── rag/                            # chunker + retriever
+│   ├── vcs/                            # GitHub / GitLab / Bitbucket clients
+│   ├── i18n/                           # Persian sink renderer + Mermaid &lrm;
+│   ├── external/                       # ThoughtWorks fetch + gap analysis
+│   ├── notifications/                  # Slack + Teams webhooks + dispatcher
+│   ├── parsers/                        # Compose + Kubernetes YAML parsers
+│   ├── scheduler/                      # BullMQ repeat-job reconciler
+│   ├── crypto.ts                       # AES-256-GCM secret encryption
+│   ├── tenant.ts                       # requireTenant / withTenant / assertOwnership
+│   ├── queue.ts                        # BullMQ producer
+│   ├── janitor.ts                      # sweeps stuck AnalysisRun rows
+│   ├── logger.ts                       # Pino root + redaction
+│   └── metrics.ts                      # Prom-client registry
+├── middleware.ts                       # NextAuth perimeter
+prisma/
+├── schema.prisma
+└── migrations/
+mini-services/analysis-ws/              # socket.io progress notifier
+adip-graph/                             # optional Python LangGraph + vLLM sidecar
+prompts/                                # SAW_102-aware LLM templates (EN + FA)
+scripts/
+├── bootstrap.sh                        # one-shot dev bringup
+├── worker.ts                           # BullMQ consumer process
+├── seed-admin.ts                       # idempotent admin user
+└── migrate-encrypt-secrets.ts          # encrypt legacy plaintext rows
+vendor/thoughtworks-radar/              # offline-safe TW Radar snapshot
+__tests__/
+├── unit/                               # vitest, 90 tests, no :3000 needed
+└── integration/                        # ADIP_INTEGRATION=1, hits :3000
+docker-compose.yml                      # Postgres + Redis for dev/test
 ```
 
-## 🎨 Available Features & Components
+## Status
 
-This scaffold includes a comprehensive set of modern web development tools:
+Both the hardening pass (security, correctness, build, tests) and the
+Completion Plan (Postgres, BullMQ, multi-tenancy, LLM adapter, RAG, all 7
+agents, scheduler, observability, notifications, D3 radar, parsers, ThoughtWorks
+gap analysis, Python sidecar scaffold) are landed. `npm run check` is green
+(90/90 unit tests). Production hardening items not yet shipped are tracked in
+the plan file under "carry-forward".
 
-### 🧩 UI Components (shadcn/ui)
-- **Layout**: Card, Separator, Aspect Ratio, Resizable Panels
-- **Forms**: Input, Textarea, Select, Checkbox, Radio Group, Switch
-- **Feedback**: Alert, Toast (Sonner), Progress, Skeleton
-- **Navigation**: Breadcrumb, Menubar, Navigation Menu, Pagination
-- **Overlay**: Dialog, Sheet, Popover, Tooltip, Hover Card
-- **Data Display**: Badge, Avatar, Calendar
+## License
 
-### 📊 Advanced Data Features
-- **Tables**: Powerful data tables with sorting, filtering, pagination (TanStack Table)
-- **Charts**: Beautiful visualizations with Recharts
-- **Forms**: Type-safe forms with React Hook Form + Zod validation
-
-### 🎨 Interactive Features
-- **Animations**: Smooth micro-interactions with Framer Motion
-- **Drag & Drop**: Modern drag-and-drop functionality with DND Kit
-- **Theme Switching**: Built-in dark/light mode support
-
-### 🔐 Backend Integration
-- **Authentication**: Ready-to-use auth flows with NextAuth.js
-- **Database**: Type-safe database operations with Prisma
-- **API Client**: HTTP requests with Fetch + TanStack Query
-- **State Management**: Simple and scalable with Zustand
-
-### 🌍 Production Features
-- **Internationalization**: Multi-language support with Next Intl
-- **Image Optimization**: Automatic image processing with Sharp
-- **Type Safety**: End-to-end TypeScript with Zod validation
-- **Essential Hooks**: 100+ useful React hooks with ReactUse for common patterns
-
-## 🤝 Get Started with Z.ai
-
-1. **Clone this scaffold** to jumpstart your project
-2. **Visit [chat.z.ai](https://chat.z.ai)** to access your AI coding assistant
-3. **Start building** with intelligent code generation and assistance
-4. **Deploy with confidence** using the production-ready setup
-
----
-
-Built with ❤️ for the developer community. Supercharged by [Z.ai](https://chat.z.ai) 🚀
+Internal project — license TBD.

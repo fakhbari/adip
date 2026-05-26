@@ -1,3 +1,15 @@
+> **Historical record — superseded.**
+>
+> This log captures the initial scaffolding session that produced the ADIP MVP.
+> Paths, runtime, and architecture have changed materially since. Treat it as
+> archaeology, not as a current reference.
+>
+> Current state lives in:
+>   - `README.md` — overview + quickstart
+>   - `CLAUDE.md` — codebase map
+>   - `RUNBOOK.md` — operations
+>   - `/home/<user>/.claude/plans/review-all-codes-improve-adaptive-truffle.md` — Completion Plan
+
 ---
 Task ID: 1
 Agent: Main Agent

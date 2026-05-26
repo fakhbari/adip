@@ -65,6 +65,7 @@ import { TechRadarAgent } from "./tech-radar-agent";
 import { C4Agent } from "./c4-agent";
 import { ADRAgent } from "./adr-agent";
 import { OpenAPIAgent } from "./openapi-agent";
+import { AsyncAPIAgent } from "./asyncapi-agent";
 
 // ============================================
 // Orchestrator Configuration
@@ -127,7 +128,8 @@ export class AgentOrchestrator {
       "c4": C4Agent,
       "adr": ADRAgent,
       "openapi": OpenAPIAgent,
-      "asyncapi": OpenAPIAgent,  // Same agent handles both
+      // Phase 3.1: dedicated AsyncAPIAgent (was aliased to OpenAPIAgent).
+      "asyncapi": AsyncAPIAgent,
     };
 
     this.agents = enabledAgents

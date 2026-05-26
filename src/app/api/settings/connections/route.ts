@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
+import { requireTenant, withTenant } from "@/lib/tenant";
 
 // Shape we return for a connection. Note: accessToken is never returned;
 // callers get a boolean indicator instead.
@@ -43,9 +44,13 @@ function toDTO(c: {
   };
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const connections = await db.repositoryConnection.findMany({
+      where: withTenant({}, ctx),
       orderBy: { createdAt: "desc" },
     });
     return NextResponse.json(connections.map(toDTO));
@@ -57,6 +62,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const body = await request.json();
     const { name, type, url, accessToken, username } = body;
 
@@ -73,9 +81,10 @@ export async function POST(request: NextRequest) {
 
     const connection = await db.repositoryConnection.create({
       data: {
+        tenantId: ctx.tenantId,
         name,
         type: type.toLowerCase(),
-        url: url.replace(/\/$/, ""), // Remove trailing slash
+        url: url.replace(/\/$/, ""),
         accessToken: encryptedToken,
         username: username ?? null,
         isActive: true,

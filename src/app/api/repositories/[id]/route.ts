@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseLanguages, parseFrameworks } from "@/lib/repo-fields";
+import { requireTenant, assertOwnership } from "@/lib/tenant";
 
 // GET /api/repositories/[id] - Get single repository
 export async function GET(
@@ -8,8 +9,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
-    
+
     const repository = await db.repository.findUnique({
       where: { id },
       include: {
@@ -74,11 +77,10 @@ export async function GET(
       },
     });
 
+    const ownership = assertOwnership(repository, ctx);
+    if (ownership) return ownership;
     if (!repository) {
-      return NextResponse.json(
-        { error: "Repository not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Repository not found" }, { status: 404 });
     }
 
     // Parse JSON-shaped String columns via the shared helper (validates shape,
@@ -112,19 +114,13 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
-    
-    // Check if repository exists
-    const repository = await db.repository.findUnique({
-      where: { id },
-    });
 
-    if (!repository) {
-      return NextResponse.json(
-        { error: "Repository not found" },
-        { status: 404 }
-      );
-    }
+    const repository = await db.repository.findUnique({ where: { id } });
+    const ownership = assertOwnership(repository, ctx);
+    if (ownership) return ownership;
 
     // Delete repository (cascade will handle related records)
     await db.repository.delete({ where: { id } });
@@ -145,17 +141,17 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
     const body = await request.json();
     const { name, description, aiProviderId, isActive, repositoryPath, repositoryUrl } = body;
 
-    // Check if repository exists
     const existing = await db.repository.findUnique({ where: { id } });
+    const ownership = assertOwnership(existing, ctx);
+    if (ownership) return ownership;
     if (!existing) {
-      return NextResponse.json(
-        { error: "Repository not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Repository not found" }, { status: 404 });
     }
 
     const repository = await db.repository.update({

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
+import { requireTenant, assertOwnership, withTenant } from "@/lib/tenant";
 
 // GET /api/settings/ai-providers/[id] - Get single AI provider
 export async function GET(
@@ -8,8 +9,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
-    
+
+    const raw = await db.aIProvider.findUnique({ where: { id }, select: { tenantId: true } });
+    const ownership = assertOwnership(raw, ctx);
+    if (ownership) return ownership;
+
     const provider = await db.aIProvider.findUnique({
       where: { id },
       select: {
@@ -54,24 +61,24 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
     const body = await request.json();
     const { name, type, apiKey, baseUrl, modelName, maxTokens, temperature, isDefault, isActive } = body;
 
-    // Check if provider exists
     const existing = await db.aIProvider.findUnique({ where: { id } });
+    const ownership = assertOwnership(existing, ctx);
+    if (ownership) return ownership;
     if (!existing) {
-      return NextResponse.json(
-        { error: "AI provider not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "AI provider not found" }, { status: 404 });
     }
 
-    // If setting as default, unset other defaults first
+    // If setting as default, unset other defaults within the same tenant.
     if (isDefault) {
       await db.aIProvider.updateMany({
-        where: { isDefault: true, id: { not: id } },
-        data: { isDefault: false }
+        where: withTenant({ isDefault: true, id: { not: id } }, ctx),
+        data: { isDefault: false },
       });
     }
 
@@ -122,19 +129,18 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
 
-    // Check if provider exists
     const existing = await db.aIProvider.findUnique({
       where: { id },
-      include: { _count: { select: { repositories: true } } }
+      include: { _count: { select: { repositories: true } } },
     });
-
+    const ownership = assertOwnership(existing, ctx);
+    if (ownership) return ownership;
     if (!existing) {
-      return NextResponse.json(
-        { error: "AI provider not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "AI provider not found" }, { status: 404 });
     }
 
     // Check if provider is being used by repositories

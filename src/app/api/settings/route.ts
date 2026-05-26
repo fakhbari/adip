@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
+import { requireTenant, withTenant } from "@/lib/tenant";
 
-// GET /api/settings returns app-wide settings. Secrets (apiKey) are NEVER
-// returned. Callers get a boolean `hasApiKey` instead — Phase 2 fix for a
-// previous leak where the plaintext key was echoed back.
-export async function GET(_request: NextRequest) {
+// Per-tenant settings. Setting now has a composite unique [tenantId, key]
+// — the upserts use the compound where shape `tenantId_key`.
+//
+// Secrets (apiKey) are NEVER returned. Callers get a boolean `hasApiKey`.
+
+function settingWhere(tenantId: string, key: string) {
+  return { tenantId_key: { tenantId, key } };
+}
+
+export async function GET(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const connections = await db.repositoryConnection.findMany({
+      where: withTenant({}, ctx),
       orderBy: { createdAt: "desc" },
     });
 
@@ -15,7 +26,9 @@ export async function GET(_request: NextRequest) {
       orderBy: { createdAt: "asc" },
     });
 
-    const settings = await db.setting.findMany();
+    const settings = await db.setting.findMany({
+      where: withTenant({}, ctx),
+    });
 
     const apiKeyRow = settings.find((s) => s.key === "apiKey")?.value ?? null;
 
@@ -30,8 +43,6 @@ export async function GET(_request: NextRequest) {
     };
 
     return NextResponse.json({
-      // Strip accessToken; this endpoint is for the settings UI which does not
-      // need it. See settings/connections/route.ts for the dedicated CRUD path.
       connections: connections.map((c) => ({
         id: c.id,
         name: c.name,
@@ -54,62 +65,53 @@ export async function GET(_request: NextRequest) {
     });
   } catch (error) {
     console.error("Error fetching settings:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch settings" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to fetch settings" }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const body = await request.json();
     const { aiProvider, apiKey, notifications } = body;
 
     if (aiProvider) {
       await db.setting.upsert({
-        where: { key: "aiProvider" },
+        where: settingWhere(ctx.tenantId, "aiProvider"),
         update: { value: aiProvider },
-        create: { key: "aiProvider", value: aiProvider, category: "ai" },
+        create: { tenantId: ctx.tenantId, key: "aiProvider", value: aiProvider, category: "ai" },
       });
     }
 
-    // Encrypt the apiKey before persisting into Setting.value (Phase 2).
-    // An empty string clears the key (write a null-equivalent empty value
-    // is avoided by simply not writing when the field is empty).
     if (apiKey !== undefined) {
       if (apiKey === "") {
-        await db.setting.deleteMany({ where: { key: "apiKey" } });
+        await db.setting.deleteMany({ where: withTenant({ key: "apiKey" }, ctx) });
       } else {
         const encrypted = encryptOptional(apiKey);
         if (encrypted) {
           await db.setting.upsert({
-            where: { key: "apiKey" },
+            where: settingWhere(ctx.tenantId, "apiKey"),
             update: { value: encrypted },
-            create: { key: "apiKey", value: encrypted, category: "ai" },
+            create: { tenantId: ctx.tenantId, key: "apiKey", value: encrypted, category: "ai" },
           });
         }
       }
     }
 
     if (notifications) {
-      await db.setting.upsert({
-        where: { key: "notification_email" },
-        update: { value: String(notifications.email) },
-        create: { key: "notification_email", value: String(notifications.email), category: "notification" },
-      });
-
-      await db.setting.upsert({
-        where: { key: "notification_slack" },
-        update: { value: String(notifications.slack) },
-        create: { key: "notification_slack", value: String(notifications.slack), category: "notification" },
-      });
-
-      await db.setting.upsert({
-        where: { key: "notification_teams" },
-        update: { value: String(notifications.teams) },
-        create: { key: "notification_teams", value: String(notifications.teams), category: "notification" },
-      });
+      for (const [key, value] of [
+        ["notification_email", String(notifications.email)],
+        ["notification_slack", String(notifications.slack)],
+        ["notification_teams", String(notifications.teams)],
+      ] as const) {
+        await db.setting.upsert({
+          where: settingWhere(ctx.tenantId, key),
+          update: { value },
+          create: { tenantId: ctx.tenantId, key, value, category: "notification" },
+        });
+      }
     }
 
     return NextResponse.json({ success: true });

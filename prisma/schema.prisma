@@ -24,6 +24,9 @@ datasource db {
 
 model RepositoryConnection {
   id            String   @id @default(cuid())
+  // Phase 0.3: tenant boundary. FKs to User for now (single-user-per-tenant).
+  // Refactored to `Organization` when SSO + memberships arrive.
+  tenantId      String
   name          String
   type          String   // "bitbucket", "gitlab", "github"
   url           String
@@ -36,10 +39,15 @@ model RepositoryConnection {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   repositories  Repository[]
+
+  @@index([tenantId])
 }
 
 model Repository {
   id               String   @id @default(cuid())
+  // Phase 0.3: tenant boundary. Cascades to Documents/ADRs/AnalysisRuns/etc
+  // (those rows inherit the parent's tenant — checked at the API perimeter).
+  tenantId         String
   connectionId     String?
   connection       RepositoryConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   externalId       String?  // ID from external VCS (null for Direct URL)
@@ -68,6 +76,8 @@ model Repository {
   technologies     TechnologyUsage[]
   adrs             ADR[]
   analysisRuns     AnalysisRun[]
+
+  @@index([tenantId])
 }
 
 // ============================================
@@ -284,6 +294,8 @@ enum AIProviderType {
 
 model AIProvider {
   id            String         @id @default(cuid())
+  // Phase 0.3: tenant boundary.
+  tenantId      String
   name          String         // Display name
   type          AIProviderType
   // Encrypted at rest via src/lib/crypto.ts (AES-256-GCM, v1: prefix).
@@ -300,8 +312,9 @@ model AIProvider {
   updatedAt     DateTime       @updatedAt
   
   repositories  Repository[]
-  
+
   @@index([isDefault])
+  @@index([tenantId])
 }
 
 // ============================================
@@ -310,11 +323,18 @@ model AIProvider {
 
 model Setting {
   id        String   @id @default(cuid())
-  key       String   @unique
+  // Phase 0.3: tenant boundary. Settings are per-tenant; the previous
+  // single-row-per-key shape is widened so each tenant can override
+  // separately. The (tenantId, key) pair is unique.
+  tenantId  String
+  key       String
   value     String   // JSON value
   category  String   // "ai", "notification", "general"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
 }
 
 // ============================================

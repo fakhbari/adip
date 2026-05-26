@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { runAnalysis, AnalysisAlreadyRunningError } from "@/lib/agents/orchestrator";
+import { requireTenant, assertOwnership } from "@/lib/tenant";
 import {
   WSProgressMessage,
   WSAnalysisCompleteMessage,
@@ -38,7 +39,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
+
+    // Verify the repository belongs to the tenant; AnalysisRun inherits.
+    const repo = await db.repository.findUnique({ where: { id }, select: { tenantId: true } });
+    const ownership = assertOwnership(repo, ctx);
+    if (ownership) return ownership;
 
     const runs = await db.analysisRun.findMany({
       where: { repositoryId: id },
@@ -62,6 +70,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
 
     // Distinguish "no body" (= run defaults) from "malformed body" (= 400).
@@ -95,6 +105,8 @@ export async function POST(
       where: { id },
       include: { aiProvider: true },
     });
+    const ownership = assertOwnership(repository, ctx);
+    if (ownership) return ownership;
     if (!repository) {
       return NextResponse.json({ error: "Repository not found" }, { status: 404 });
     }
@@ -158,9 +170,15 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
     const { searchParams } = new URL(request.url);
     const analysisRunId = searchParams.get("analysisRunId");
+
+    const repo = await db.repository.findUnique({ where: { id }, select: { tenantId: true } });
+    const ownership = assertOwnership(repo, ctx);
+    if (ownership) return ownership;
 
     if (!analysisRunId) {
       return NextResponse.json(

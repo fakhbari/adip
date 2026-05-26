@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
+import { requireTenant, withTenant } from "@/lib/tenant";
 
-// GET /api/settings/ai-providers - List all AI providers
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const providers = await db.aIProvider.findMany({
+      where: withTenant({}, ctx),
       orderBy: [
         { isDefault: "desc" },
         { name: "asc" },
@@ -42,6 +46,8 @@ export async function GET() {
 // POST /api/settings/ai-providers - Create new AI provider
 export async function POST(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const body = await request.json();
     const { name, type, apiKey, baseUrl, modelName, maxTokens, temperature, isDefault } = body;
 
@@ -52,19 +58,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // If setting as default, unset other defaults first
+    // If setting as default, unset other defaults within this tenant first.
     if (isDefault) {
       await db.aIProvider.updateMany({
-        where: { isDefault: true },
-        data: { isDefault: false }
+        where: withTenant({ isDefault: true }, ctx),
+        data: { isDefault: false },
       });
     }
 
     const provider = await db.aIProvider.create({
       data: {
+        tenantId: ctx.tenantId,
         name,
         type,
-        // Encrypt at rest (Phase 2). Idempotent for already-encrypted input.
         apiKey: encryptOptional(apiKey),
         baseUrl: baseUrl || null,
         modelName,

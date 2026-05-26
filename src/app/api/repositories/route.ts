@@ -1,23 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseLanguages } from "@/lib/repo-fields";
+import { requireTenant, withTenant } from "@/lib/tenant";
 
 export async function GET(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const searchParams = request.nextUrl.searchParams;
     const search = searchParams.get("search") || "";
     const status = searchParams.get("status") || "";
 
     const repositories = await db.repository.findMany({
-      where: {
-        isActive: true,
-        ...(search && {
-          OR: [
-            { name: { contains: search } },
-            { description: { contains: search } },
-          ],
-        }),
-      },
+      where: withTenant(
+        {
+          isActive: true,
+          ...(search && {
+            OR: [
+              { name: { contains: search } },
+              { description: { contains: search } },
+            ],
+          }),
+        },
+        ctx
+      ),
       include: {
         connection: {
           select: {
@@ -101,6 +108,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
+
     const body = await request.json();
     const {
       name,
@@ -128,36 +138,29 @@ export async function POST(request: NextRequest) {
     // Handle connection
     let connId: string | null = connectionId || null;
     
-    // If no connection but has URL, try to find or create appropriate connection
+    // If no connection but has URL, try to find a tenant-owned connection.
     if (!connId && repositoryUrl) {
       try {
         const url = new URL(repositoryUrl);
         const hostname = url.hostname.toLowerCase();
-        
-        // Try to find existing connection for this host
         const existingConnection = await db.repositoryConnection.findFirst({
-          where: {
-            url: { contains: hostname }
-          }
+          where: withTenant({ url: { contains: hostname } }, ctx),
         });
-        
-        if (existingConnection) {
-          connId = existingConnection.id;
-        }
+        if (existingConnection) connId = existingConnection.id;
       } catch {
         // Invalid URL, ignore
       }
     }
 
-    // If still no connection, create a default "Public" connection or use existing
+    // If still no connection, create a default "Public" connection for the tenant.
     if (!connId) {
       let defaultConnection = await db.repositoryConnection.findFirst({
-        where: { name: "Public Repositories" }
+        where: withTenant({ name: "Public Repositories" }, ctx),
       });
-      
       if (!defaultConnection) {
         defaultConnection = await db.repositoryConnection.create({
           data: {
+            tenantId: ctx.tenantId,
             name: "Public Repositories",
             type: "github",
             url: "https://github.com",
@@ -170,6 +173,7 @@ export async function POST(request: NextRequest) {
 
     const repository = await db.repository.create({
       data: {
+        tenantId: ctx.tenantId,
         connectionId: connId,
         externalId: repositoryUrl || generatedSlug,
         name,
@@ -177,8 +181,8 @@ export async function POST(request: NextRequest) {
         description: description || null,
         repositoryPath: typeof repositoryPath === "string" && repositoryPath ? repositoryPath : null,
         repositoryUrl: typeof repositoryUrl === "string" && repositoryUrl ? repositoryUrl : null,
-        languages: null, // Will be detected by AI analysis
-        frameworks: null, // Will be detected by AI analysis
+        languages: null,
+        frameworks: null,
       },
       include: {
         connection: {

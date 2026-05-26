@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
+import { requireTenant, assertOwnership } from "@/lib/tenant";
 
 type ConnectionDTO = {
   id: string;
@@ -46,17 +47,13 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
-    const connection = await db.repositoryConnection.findUnique({
-      where: { id },
-    });
-
-    if (!connection) {
-      return NextResponse.json(
-        { error: "Connection not found" },
-        { status: 404 }
-      );
-    }
+    const connection = await db.repositoryConnection.findUnique({ where: { id } });
+    const ownership = assertOwnership(connection, ctx);
+    if (ownership) return ownership;
+    if (!connection) return NextResponse.json({ error: "Connection not found" }, { status: 404 });
 
     return NextResponse.json(toDTO(connection));
   } catch (error) {
@@ -73,19 +70,17 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
     const body = await request.json();
     const { name, type, url, accessToken, username, isActive } = body;
 
-    const existingConnection = await db.repositoryConnection.findUnique({
-      where: { id },
-    });
-
+    const existingConnection = await db.repositoryConnection.findUnique({ where: { id } });
+    const ownership = assertOwnership(existingConnection, ctx);
+    if (ownership) return ownership;
     if (!existingConnection) {
-      return NextResponse.json(
-        { error: "Connection not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
     // accessToken handling:
@@ -137,17 +132,15 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await requireTenant(request);
+    if (ctx instanceof NextResponse) return ctx;
     const { id } = await params;
 
-    const existingConnection = await db.repositoryConnection.findUnique({
-      where: { id },
-    });
-
+    const existingConnection = await db.repositoryConnection.findUnique({ where: { id } });
+    const ownership = assertOwnership(existingConnection, ctx);
+    if (ownership) return ownership;
     if (!existingConnection) {
-      return NextResponse.json(
-        { error: "Connection not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
     await db.repositoryConnection.delete({

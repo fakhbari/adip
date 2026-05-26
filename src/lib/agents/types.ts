@@ -1,6 +1,7 @@
 // Agent Types for Multi-Agent Architecture
 
 import { AIProvider, Repository, RepositoryConnection } from "@prisma/client";
+import type { LLMProvider } from "@/lib/llm";
 
 // ============================================
 // Core Types
@@ -58,6 +59,13 @@ export interface AnalysisContext {
   incrementalScope?: Set<string>;
   // The commit SHA we are analysing, useful for snapshot writeback.
   currentSha?: string;
+  // Phase 2.5 — LLMProvider instance built from `aiProvider`. Agents
+  // call `context.llm.chat(...)` (via runWithSchema) for the AI pass
+  // that augments their regex output. Undefined when no AIProvider is
+  // configured — agents fall back to regex-only output.
+  llm?: LLMProvider;
+  // The repository's preferred output locale (default "fa").
+  outputLocale?: "en" | "fa";
 }
 
 export interface FileInfo {

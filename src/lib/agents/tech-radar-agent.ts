@@ -1,13 +1,29 @@
 // Tech Radar Agent - Detects technologies, languages, and frameworks
 
 import { BaseAgent, createAgentConfig } from "./base-agent";
-import { 
-  AgentResult, 
-  AnalysisContext, 
-  DetectedTechnology, 
-  TechRadarResult 
+import {
+  AgentResult,
+  AnalysisContext,
+  DetectedTechnology,
+  TechRadarResult,
 } from "./types";
 import { FILE_PATTERNS } from "@/lib/vcs";
+import { z } from "zod";
+import { runWithSchema, SchemaValidationError } from "@/lib/llm/structured";
+import { PromptRegistry } from "@/lib/llm/prompt-registry";
+import { logger } from "@/lib/logger";
+
+const trLog = logger("agents.tech-radar");
+
+// LLM pass output: per-tech ring + quadrant + rationale.
+const TechClassificationSchema = z.array(
+  z.object({
+    name: z.string(),
+    quadrant: z.enum(["techniques", "tools", "platforms", "languages-frameworks"]),
+    ring: z.enum(["adopt", "trial", "assess", "hold"]),
+    rationale: z.string(),
+  })
+);
 
 // Technology mapping for common packages
 const TECHNOLOGY_CATEGORIES: Record<string, { category: string; quadrant: "techniques" | "tools" | "platforms" | "languages-frameworks" }> = {
@@ -235,9 +251,54 @@ export class TechRadarAgent extends BaseAgent {
 
     this.updateProgress(75, "Determining technology radar positions...");
 
-    // Determine radar rings based on usage and maturity
+    // Regex pre-pass classification (lookup table).
     for (const tech of technologies) {
       tech.ring = this.determineRadarRing(tech);
+    }
+
+    // Phase 2.5 — LLM pass. If a provider is wired, ask it to refine the
+    // ring/quadrant/rationale for the detected list. Failure keeps the
+    // regex pre-pass classification so the analysis still completes.
+    if (context.llm && technologies.length > 0) {
+      this.updateProgress(82, "Classifying technologies via LLM...");
+      try {
+        const techList = technologies
+          .slice(0, 100) // cap prompt size; 100 is plenty for 99% of repos
+          .map((t) => `- ${t.name} (current: ${t.ring}, source: ${t.sourceFile})`)
+          .join("\n");
+        const locale = context.outputLocale ?? "fa";
+        const prompt = await PromptRegistry.render({
+          agent: "tech-radar",
+          task: "classify",
+          locale,
+          vars: { techList },
+        });
+        const { data: classified } = await runWithSchema({
+          provider: context.llm,
+          messages: [{ role: "user", content: prompt }],
+          schema: TechClassificationSchema,
+          opts: { meta: { analysisRunId: context.analysisRunId, agentType: "tech-radar" } },
+        });
+        // Merge LLM classification back into the detected list by name.
+        const byName = new Map(classified.map((c) => [c.name.toLowerCase(), c]));
+        for (const tech of technologies) {
+          const m = byName.get(tech.name.toLowerCase());
+          if (m) {
+            tech.ring = m.ring;
+            tech.quadrant = m.quadrant;
+            // Stash rationale in description for the radar UI.
+            tech.description = m.rationale;
+          }
+        }
+      } catch (err) {
+        const reason =
+          err instanceof SchemaValidationError
+            ? "schema validation exhausted retries"
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        trLog.warn({ reason }, "LLM classification skipped; regex pre-pass result kept");
+      }
     }
 
     this.updateProgress(90, "Finalizing results...");

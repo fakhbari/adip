@@ -7,6 +7,7 @@ import { parseLanguages } from "@/lib/repo-fields";
 import { logger } from "@/lib/logger";
 import { agentDurationSeconds, analysisRunsTotal } from "@/lib/metrics";
 import { RepoFileCache } from "./repo-file-cache";
+import { createLLMProvider, type LLMProvider } from "@/lib/llm";
 
 const orchLog = logger("orchestrator");
 import type { DocumentType, Prisma } from "@prisma/client";
@@ -254,6 +255,24 @@ export class AgentOrchestrator {
         );
       }
 
+      // Phase 2.5 — instantiate the LLM provider (if configured) so
+      // agents can call it directly. A build failure here does not
+      // fail the run — agents fall back to regex-only output.
+      let llm: LLMProvider | undefined;
+      if (this.repository!.aiProvider) {
+        try {
+          llm = createLLMProvider({
+            ...this.repository!.aiProvider,
+            apiKey: decryptOptional(this.repository!.aiProvider.apiKey),
+          });
+        } catch (err) {
+          orchLog.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            "could not build LLM provider; agents will run regex-only"
+          );
+        }
+      }
+
       // Step 4: Build analysis context
       const context: AnalysisContext = {
         repository: this.repository!,
@@ -267,6 +286,8 @@ export class AgentOrchestrator {
         })),
         incrementalScope,
         currentSha,
+        llm,
+        outputLocale: "fa",
       };
 
       // Step 5: Run agents in sequence

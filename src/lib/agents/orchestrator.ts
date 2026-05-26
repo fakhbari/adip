@@ -6,6 +6,7 @@ import { decryptOptional } from "@/lib/crypto";
 import { parseLanguages } from "@/lib/repo-fields";
 import { logger } from "@/lib/logger";
 import { agentDurationSeconds, analysisRunsTotal } from "@/lib/metrics";
+import { RepoFileCache } from "./repo-file-cache";
 
 const orchLog = logger("orchestrator");
 import type { DocumentType, Prisma } from "@prisma/client";
@@ -506,8 +507,25 @@ export class AgentOrchestrator {
     // Deduplicate
     const uniquePaths = [...new Set(pathsToFetch)];
 
-    // Fetch all files
-    return await this.vcsClient.getMultipleFiles(owner, repo, branch, uniquePaths);
+    // Phase 1.3: route file content through a bounded RepoFileCache so a
+    // pathological monorepo cannot OOM the worker. The cache silently
+    // rejects files past `maxFileBytes` (default 1 MB) and stops
+    // accepting once total bytes exceed `maxBytes` (default 256 MB).
+    // The Map shape returned here matches the previous contract — agents
+    // still call `context.fileContents.get(path)` synchronously.
+    const fetched = await this.vcsClient.getMultipleFiles(owner, repo, branch, uniquePaths);
+    const cache = new RepoFileCache();
+    let skipped = 0;
+    for (const [path, content] of fetched) {
+      if (!cache.set(path, content)) skipped++;
+    }
+    if (skipped > 0) {
+      orchLog.warn(
+        { skipped, bytes: cache.bytes(), files: cache.size() },
+        "skipped files past memory budget"
+      );
+    }
+    return cache.toMap();
   }
 
   // Sample files evenly across directories

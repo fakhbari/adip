@@ -23,12 +23,38 @@ export const NotifyShapes = {
     error: z.string(),
     agentType: z.string().optional(),
   }),
+  // Polish P4.4 — LLM streaming delta. Bypasses the 200 ms coalescer
+  // (live-log page needs tokens as they arrive); the server batches at
+  // ~16 frames/sec/room to keep the browser smooth.
+  "llm-delta": z.object({
+    analysisRunId: z.string().min(1),
+    repositoryId: z.string().min(1),
+    agentType: z.string().optional(),
+    delta: z.string(),
+    finish: z.string().optional(),
+  }),
+  // Polish P4.4 — generic agent timeline event for the live-log page.
+  // Maps 1:1 to the RunEvent rows the orchestrator records.
+  "agent-event": z.object({
+    analysisRunId: z.string().min(1),
+    repositoryId: z.string().min(1),
+    type: z.string(),
+    agentType: z.string().optional(),
+    content: z.unknown().optional(),
+    ts: z.string().optional(),
+  }),
 } as const;
 
 export type NotifyAction = keyof typeof NotifyShapes;
 
 export function isValidAction(value: string): value is NotifyAction {
-  return value === "progress" || value === "complete" || value === "error";
+  return (
+    value === "progress" ||
+    value === "complete" ||
+    value === "error" ||
+    value === "llm-delta" ||
+    value === "agent-event"
+  );
 }
 
 export type ValidateInput = {

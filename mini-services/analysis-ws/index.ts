@@ -224,6 +224,41 @@ function flushPendingFor(analysisRunId: string): void {
   emitNow("analysis-progress", pending.payload);
 }
 
+// Polish P4.4 — llm-delta batcher. Bypasses the 200 ms progress
+// coalescer (the live-log page wants tokens fast) but batches at
+// ~16 frames/sec/room so a fast model does not melt the browser.
+const LLM_FRAME_MS = 60;
+type LlmPending = { frames: Array<{ analysisRunId: string; repositoryId: string; agentType?: string; delta: string; finish?: string }>; timer: NodeJS.Timeout };
+const pendingLlm = new Map<string, LlmPending>();
+
+function emitLlmDelta(payload: {
+  analysisRunId: string;
+  repositoryId: string;
+  agentType?: string;
+  delta: string;
+  finish?: string;
+}): void {
+  const key = payload.analysisRunId;
+  const existing = pendingLlm.get(key);
+  if (existing) {
+    existing.frames.push(payload);
+    return;
+  }
+  const frames = [payload];
+  const timer = setTimeout(() => {
+    pendingLlm.delete(key);
+    // Concatenate delta strings of consecutive frames so the browser
+    // gets a single emit per frame-window (less DOM thrash).
+    const merged = frames.reduce<{ analysisRunId: string; repositoryId: string; agentType?: string; delta: string; finish?: string }>(
+      (acc, f) => ({ ...acc, delta: acc.delta + f.delta, finish: f.finish ?? acc.finish }),
+      { analysisRunId: payload.analysisRunId, repositoryId: payload.repositoryId, agentType: payload.agentType, delta: "" }
+    );
+    io.to(`analysis:${merged.analysisRunId}`).emit("llm-delta", merged);
+    io.to(`repository:${merged.repositoryId}`).emit("llm-delta", merged);
+  }, LLM_FRAME_MS);
+  pendingLlm.set(key, { frames, timer });
+}
+
 httpServer.on("request", async (req, res) => {
   // Health check (no auth needed). Lets `curl :3003/healthz` succeed for liveness probes.
   if (req.method === "GET" && req.url === "/healthz") {
@@ -250,10 +285,15 @@ httpServer.on("request", async (req, res) => {
   }
 
   const { action, payload } = result;
-  // Phase 1.5: progress is coalesced; complete + error are immediate
-  // (after flushing any held progress so the UI sees the last frame).
+  // Phase 1.5: progress is coalesced (200 ms window).
+  // Polish P4.4: llm-delta bypasses coalesce but is batched at
+  // ≤16 frames/sec/room so the browser does not over-render.
   if (action === "progress") {
     emitCoalescedProgress(payload);
+  } else if (action === "llm-delta") {
+    emitLlmDelta(payload);
+  } else if (action === "agent-event") {
+    emitNow("agent-event", payload);
   } else {
     flushPendingFor(payload.analysisRunId);
     emitNow(`analysis-${action}`, payload);

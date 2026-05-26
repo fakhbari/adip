@@ -96,6 +96,24 @@ describe("validateNotify", () => {
     if (r.ok) expect(r.action).toBe("error");
   });
 
+  it("accepts a valid llm-delta payload", () => {
+    const r = makeInput({
+      url: "/notify/llm-delta",
+      body: JSON.stringify({ analysisRunId: "r", repositoryId: "p", agentType: "adr", delta: "hello" }),
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.action).toBe("llm-delta");
+  });
+
+  it("accepts a valid agent-event payload", () => {
+    const r = makeInput({
+      url: "/notify/agent-event",
+      body: JSON.stringify({ analysisRunId: "r", repositoryId: "p", type: "agent-start", agentType: "c4" }),
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.action).toBe("agent-event");
+  });
+
   it("ignores duplicate header value (array form)", () => {
     // node http may surface duplicate headers as arrays. Our validator should
     // reject — we expect a single string.

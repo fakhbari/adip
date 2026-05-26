@@ -7,12 +7,15 @@ import type { LLMProvider } from "@/lib/llm";
 // Core Types
 // ============================================
 
-export type AgentType = 
-  | "tech-radar" 
-  | "c4" 
-  | "adr" 
+export type AgentType =
+  | "tech-radar"
+  | "c4"
+  | "adr"
   | "openapi"
-  | "asyncapi";
+  | "asyncapi"
+  // Phase 3.2 / 3.3 — new agent kinds.
+  | "data-catalog"
+  | "context-map";
 
 export type AgentStatus = 
   | "idle" 

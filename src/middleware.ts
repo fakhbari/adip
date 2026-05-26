@@ -16,8 +16,10 @@ import { getToken } from "next-auth/jwt";
 const PUBLIC_API_PREFIXES = ["/api/auth", "/api"];
 
 function isPublicApiPath(pathname: string): boolean {
-  // Exact match for /api (the health endpoint). Subpaths under /api/auth.
+  // Exact match for /api (health) and /api/metrics (Prometheus scrape).
+  // Subpaths under /api/auth (NextAuth).
   if (pathname === "/api") return true;
+  if (pathname === "/api/metrics") return true;
   return pathname.startsWith("/api/auth");
 }
 

@@ -4,6 +4,10 @@ import { db } from "@/lib/db";
 import { createVCSClient, parseRepositoryUrl, FILE_PATTERNS, VCSClient, VCSFile } from "@/lib/vcs";
 import { decryptOptional } from "@/lib/crypto";
 import { parseLanguages } from "@/lib/repo-fields";
+import { logger } from "@/lib/logger";
+import { agentDurationSeconds, analysisRunsTotal } from "@/lib/metrics";
+
+const orchLog = logger("orchestrator");
 import type { DocumentType, Prisma } from "@prisma/client";
 
 // Prisma transaction client type — the subset of `db` available inside
@@ -233,13 +237,14 @@ export class AgentOrchestrator {
       let currentProgress = 20;
 
       for (const agent of this.agents) {
-        // Set progress callback for agent
         agent.setProgressCallback((progress) => {
           this.sendProgress(progress);
         });
 
-        // Execute agent
+        const agentStart = Date.now();
         const result = await agent.execute(context);
+        const seconds = (Date.now() - agentStart) / 1000;
+        agentDurationSeconds.labels(result.agentType, result.status).observe(seconds);
         this.results.push(result);
 
         currentProgress += progressPerAgent;
@@ -763,6 +768,7 @@ export class AgentOrchestrator {
 
   // Update analysis run status
   private async updateAnalysisRun(status: "COMPLETED" | "FAILED", error?: string): Promise<void> {
+    analysisRunsTotal.labels(status.toLowerCase()).inc();
     await db.analysisRun.update({
       where: { id: this.config.analysisRunId },
       data: {

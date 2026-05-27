@@ -386,6 +386,11 @@ model User {
   passwordHash  String?
   // Simple role gate. "admin" can manage settings; "user" is read-mostly.
   role          String    @default("user")
+  // Polish P1.6 — soft-deactivation. When false, the credentials provider
+  // refuses sign-in and middleware can deny existing sessions on the next
+  // request. We do not delete user rows because audit/foreign-key references
+  // keep them in scope.
+  isActive      Boolean   @default(true)
 
   accounts Account[]
   sessions Session[]

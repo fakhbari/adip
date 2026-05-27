@@ -29,6 +29,11 @@ export const authOptions: NextAuthOptions = {
           where: { email: credentials.email.toLowerCase() },
         });
         if (!user || !user.passwordHash) return null;
+        // Polish P1.6 — deactivated users cannot start a new session.
+        // Existing sessions stay valid until the JWT expires; the admin
+        // UI's "deactivate" flow is documented as best-effort within the
+        // session TTL.
+        if (!user.isActive) return null;
 
         const ok = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!ok) return null;

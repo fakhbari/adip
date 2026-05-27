@@ -2,6 +2,8 @@
 
 // Repository management page with analysis WebSocket connection
 import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   GitBranch,
   Search,
@@ -74,6 +76,7 @@ interface Repository {
   name: string;
   slug: string;
   description: string | null;
+  connectionId?: string | null;
   connectionName?: string;
   connectionType?: string;
   connectionUrl?: string;
@@ -859,14 +862,38 @@ export function RepositoriesPage() {
                               <Play className="mr-2 h-4 w-4" />
                               {isAnalyzing ? "Analyzing..." : "Run Analysis"}
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <FileText className="mr-2 h-4 w-4" />
-                              View Documents
+                            {/* Polish P2.3 — wire dropdown actions. */}
+                            <DropdownMenuItem asChild>
+                              <Link href={`/repositories/${repo.id}/runs`} onClick={(e) => e.stopPropagation()}>
+                                <FileText className="mr-2 h-4 w-4" />
+                                View runs &amp; documents
+                              </Link>
                             </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link href={`/adr?repositoryId=${repo.id}`} onClick={(e) => e.stopPropagation()}>
+                                <FileText className="mr-2 h-4 w-4" />
+                                View ADRs
+                              </Link>
+                            </DropdownMenuItem>
+                            {repo.connectionId && (
+                              <DropdownMenuItem asChild>
+                                <Link href={`/settings?connection=${repo.connectionId}`} onClick={(e) => e.stopPropagation()}>
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  Edit connection
+                                </Link>
+                              </DropdownMenuItem>
+                            )}
                             {repo.connectionUrl && (
-                              <DropdownMenuItem>
-                                <ExternalLink className="mr-2 h-4 w-4" />
-                                Open in {repo.connectionName}
+                              <DropdownMenuItem asChild>
+                                <a
+                                  href={repo.connectionUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  Open in {repo.connectionName}
+                                </a>
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuSeparator />

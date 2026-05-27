@@ -41,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { HeaderSearch } from "@/components/layout/header-search";
 
 // Phase 8: switched from a callback-driven `activeView` to App Router
 // subroutes. Each nav item is now an `<href>` and active state derives from
@@ -315,14 +316,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <Menu className="h-5 w-5" />
             </Button>
 
-            <div className="relative hidden md:block">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder="Search repositories, documents..."
-                className="w-64 pl-8 lg:w-80"
-              />
-            </div>
+            <HeaderSearch />
           </div>
 
           <div className="flex items-center gap-3">

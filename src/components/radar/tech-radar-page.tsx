@@ -52,6 +52,8 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { D3Radar, type RadarTech } from "@/components/radar/D3Radar";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -126,6 +128,13 @@ export function TechRadarPage() {
   const [selectedRing, setSelectedRing] = useState<string>("all");
   const [selectedTech, setSelectedTech] = useState<Technology | null>(null);
   const [viewMode, setViewMode] = useState<"radar" | "table">("radar");
+  // Polish P2.5 — toggle between the legacy hand-rolled SVG radar and the
+  // D3Radar component (which supports quadrant sectors + a ThoughtWorks
+  // overlay). Default off until the orchestrator persists the `twRing`
+  // field; once `data.technologies[].twRing` is reliably populated, flip
+  // the default.
+  const [useD3, setUseD3] = useState(false);
+  const [showTwOverlay, setShowTwOverlay] = useState(true);
 
   // Zoom and Pan state
   const [zoom, setZoom] = useState(1);
@@ -670,6 +679,35 @@ export function TechRadarPage() {
               </DropdownMenu>
             </CardHeader>
             <CardContent>
+              {/* Polish P2.5 — D3 layout toggle. */}
+              <div className="flex items-center justify-end gap-4 mb-3 text-sm">
+                <label className="inline-flex items-center gap-2">
+                  <Switch checked={useD3} onCheckedChange={setUseD3} /> D3 layout
+                </label>
+                {useD3 && (
+                  <label className="inline-flex items-center gap-2">
+                    <Switch checked={showTwOverlay} onCheckedChange={setShowTwOverlay} /> ThoughtWorks overlay
+                  </label>
+                )}
+              </div>
+
+              {useD3 && (
+                <div className="flex justify-center mb-4">
+                  <D3Radar
+                    size={640}
+                    data={(filteredTechnologies as Array<{ name: string; quadrant: string; ring: string; description?: string; twPos?: string }>).map((t) => ({
+                      name: t.name,
+                      // Map orchestrator's "languages_frameworks" to the D3
+                      // component's hyphen-style key.
+                      quadrant: (t.quadrant === "languages_frameworks" ? "languages-frameworks" : t.quadrant) as RadarTech["quadrant"],
+                      ring: t.ring as RadarTech["ring"],
+                      twRing: showTwOverlay ? (t.twPos as RadarTech["twRing"] | undefined) : undefined,
+                      rationale: t.description,
+                    }))}
+                  />
+                </div>
+              )}
+
               {/* Zoom Controls */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">

@@ -14,8 +14,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RefreshCw, Database, Download, Copy } from "lucide-react";
+import { RefreshCw, Database, Download, Copy, Pencil } from "lucide-react";
 import { apiFetch, showApiError } from "@/lib/api-client";
+import { EditDocDialog } from "@/components/shared/edit-doc-dialog";
+import { RegenerateButton } from "@/components/shared/regenerate-button";
 
 type Doc = {
   id: string;
@@ -82,6 +84,7 @@ export function DataCatalogPage() {
   const [data, setData] = useState<ApiShape | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
     void Promise.resolve().then(async () => {
@@ -145,13 +148,9 @@ export function DataCatalogPage() {
                   {doc.repositoryName} · version {doc.version}
                 </CardDescription>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Badge>{doc.status}</Badge>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void navigator.clipboard.writeText(doc.content)}
-                >
+                <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(doc.content)}>
                   <Copy className="h-4 w-4 mr-1" /> Copy
                 </Button>
                 <Button
@@ -169,6 +168,10 @@ export function DataCatalogPage() {
                 >
                   <Download className="h-4 w-4 mr-1" /> Download
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-4 w-4 mr-1" /> Edit
+                </Button>
+                <RegenerateButton repositoryId={doc.repositoryId} agentType="data-catalog" />
               </div>
             </div>
           </CardHeader>
@@ -185,6 +188,14 @@ export function DataCatalogPage() {
               </div>
             )}
           </CardContent>
+          <EditDocDialog
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            documentId={doc.id}
+            initialTitle={doc.title}
+            initialContent={doc.content}
+            onSaved={() => window.location.reload()}
+          />
         </Card>
       ) : (
         <Card>

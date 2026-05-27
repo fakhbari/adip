@@ -13,8 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RefreshCw, Radio, Copy, Download } from "lucide-react";
+import { RefreshCw, Radio, Copy, Download, Pencil } from "lucide-react";
 import { apiFetch, showApiError } from "@/lib/api-client";
+import { EditDocDialog } from "@/components/shared/edit-doc-dialog";
+import { RegenerateButton } from "@/components/shared/regenerate-button";
 
 type Doc = {
   id: string;
@@ -35,6 +37,7 @@ export function AsyncAPIPage() {
   const [data, setData] = useState<ApiShape | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
     void Promise.resolve().then(async () => {
@@ -97,13 +100,9 @@ export function AsyncAPIPage() {
                   {doc.repositoryName} · version {doc.version}
                 </CardDescription>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Badge>{doc.status}</Badge>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void navigator.clipboard.writeText(doc.content)}
-                >
+                <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(doc.content)}>
                   <Copy className="h-4 w-4 mr-1" /> Copy
                 </Button>
                 <Button
@@ -121,12 +120,24 @@ export function AsyncAPIPage() {
                 >
                   <Download className="h-4 w-4 mr-1" /> Download
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-4 w-4 mr-1" /> Edit
+                </Button>
+                <RegenerateButton repositoryId={doc.repositoryId} agentType="asyncapi" />
               </div>
             </div>
           </CardHeader>
           <CardContent>
             <Textarea readOnly value={doc.content} className="font-mono text-xs h-[600px]" />
           </CardContent>
+          <EditDocDialog
+            open={editOpen}
+            onOpenChange={setEditOpen}
+            documentId={doc.id}
+            initialTitle={doc.title}
+            initialContent={doc.content}
+            onSaved={() => window.location.reload()}
+          />
         </Card>
       ) : (
         <Card>

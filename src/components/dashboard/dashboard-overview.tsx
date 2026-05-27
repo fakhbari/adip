@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   GitBranch,
   FileText,
@@ -15,6 +17,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { apiFetch, showApiError } from "@/lib/api-client";
 import {
   ChartConfig,
   ChartContainer,
@@ -120,8 +125,14 @@ const chartConfig = {
 } satisfies ChartConfig;
 
 export function DashboardOverview() {
+  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats>(defaultStats);
   const [isLoading, setIsLoading] = useState(true);
+  // Polish P2.1 — repo picker dialog state.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerRepos, setPickerRepos] = useState<{ id: string; name: string }[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<string>("");
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -140,6 +151,37 @@ export function DashboardOverview() {
 
     fetchStats();
   }, []);
+
+  // Polish P2.1 — fetch the tenant's repos when opening the picker, then
+  // POST /api/repositories/[id]/analysis on confirm. Routes to the live
+  // log page so the user sees the run as it happens.
+  const openPicker = async () => {
+    setPickerOpen(true);
+    const res = await apiFetch<Array<{ id: string; name: string }>>("/api/repositories");
+    if ("data" in res) {
+      setPickerRepos(res.data);
+      if (res.data.length > 0) setSelectedRepo(res.data[0].id);
+    } else {
+      showApiError(res);
+    }
+  };
+
+  const startAnalysis = async () => {
+    if (!selectedRepo) return;
+    setStarting(true);
+    const res = await apiFetch<{ analysisRunId: string }>(
+      `/api/repositories/${selectedRepo}/analysis`,
+      { method: "POST", json: {} }
+    );
+    if ("data" in res) {
+      toast.success("Analysis queued.");
+      setPickerOpen(false);
+      router.push(`/repositories/${selectedRepo}/runs/${res.data.analysisRunId}/live`);
+    } else {
+      showApiError(res);
+    }
+    setStarting(false);
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -187,12 +229,44 @@ export function DashboardOverview() {
               <span className="text-sm font-medium">{stats.lastRunTime}</span>
             </div>
           </div>
-          <Button>
+          <Button onClick={openPicker}>
             <Zap className="mr-2 h-4 w-4" />
             Run Analysis
           </Button>
         </div>
       </div>
+
+      <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Run analysis</DialogTitle>
+          </DialogHeader>
+          {pickerRepos.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No repositories yet. Add one from the Repositories page first.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select repository" />
+                </SelectTrigger>
+                <SelectContent>
+                  {pickerRepos.map((r) => (
+                    <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPickerOpen(false)}>Cancel</Button>
+                <Button disabled={!selectedRepo || starting} onClick={startAnalysis}>
+                  {starting ? "Starting…" : "Start"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

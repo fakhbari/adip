@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseLanguages } from "@/lib/repo-fields";
 import { requireTenant, withTenant } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 export async function GET(request: NextRequest) {
   try {
@@ -196,19 +197,13 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Log activity
-    await db.activityLog.create({
-      data: {
-        action: "repository_added",
-        entityType: "repository",
-        entityId: repository.id,
-        details: JSON.stringify({ 
-          name, 
-          connectionId: connId,
-          url: repositoryUrl,
-          isPrivate 
-        }),
-      },
+    // Polish P5.3 — tenant + user attribution via logActivity helper.
+    await logActivity({
+      ctx,
+      action: "repository.create",
+      entityType: "Repository",
+      entityId: repository.id,
+      details: { name, connectionId: connId, url: repositoryUrl, isPrivate },
     });
 
     return NextResponse.json({

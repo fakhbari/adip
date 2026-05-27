@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
 import { requireTenant, assertOwnership, withTenant } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 // GET /api/settings/ai-providers/[id] - Get single AI provider
 export async function GET(
@@ -113,6 +114,13 @@ export async function PUT(
       }
     });
 
+    // Polish P5.3 — distinguish key rotations from other edits so security
+    // auditors can grep just "ai-provider.rotate-key".
+    if (apiKey !== undefined) {
+      await logActivity({ ctx, action: "ai-provider.rotate-key", entityType: "AIProvider", entityId: id });
+    } else {
+      await logActivity({ ctx, action: "ai-provider.update", entityType: "AIProvider", entityId: id });
+    }
     return NextResponse.json(provider);
   } catch (error) {
     console.error("Error updating AI provider:", error);
@@ -152,6 +160,7 @@ export async function DELETE(
     }
 
     await db.aIProvider.delete({ where: { id } });
+    await logActivity({ ctx, action: "ai-provider.delete", entityType: "AIProvider", entityId: id });
 
     return NextResponse.json({ success: true });
   } catch (error) {

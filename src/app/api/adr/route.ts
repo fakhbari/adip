@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { mapErrorToResponse } from "@/lib/api-errors";
+import { requireTenant, assertOwnership } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 export async function GET(_request: NextRequest) {
   try {
@@ -47,9 +49,16 @@ export async function GET(_request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const ctx = await requireTenant(request);
+  if (ctx instanceof NextResponse) return ctx;
   try {
     const body = await request.json();
     const { repositoryId, title, context, decision, consequences, alternatives } = body;
+
+    // Polish P5.3 — confirm tenant ownership of the repo before adding an ADR.
+    const repo = await db.repository.findUnique({ where: { id: repositoryId }, select: { tenantId: true } });
+    const own = assertOwnership(repo, ctx);
+    if (own) return own;
 
     // Get the next ADR number for this repository
     const lastADR = await db.aDR.findFirst({
@@ -77,14 +86,12 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Log activity
-    await db.activityLog.create({
-      data: {
-        action: "ADR_CREATED",
-        entityType: "ADR",
-        entityId: adr.id,
-        details: JSON.stringify({ title, repositoryId }),
-      },
+    await logActivity({
+      ctx,
+      action: "document.edit",
+      entityType: "ADR",
+      entityId: adr.id,
+      details: { title, repositoryId },
     });
 
     return NextResponse.json({

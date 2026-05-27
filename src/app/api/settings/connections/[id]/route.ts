@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
 import { requireTenant, assertOwnership } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 type ConnectionDTO = {
   id: string;
@@ -104,17 +105,12 @@ export async function PUT(
       },
     });
 
-    await db.activityLog.create({
-      data: {
-        action: "connection_updated",
-        entityType: "repository_connection",
-        entityId: connection.id,
-        details: JSON.stringify({
-          name: connection.name,
-          type: connection.type,
-          url: connection.url,
-        }),
-      },
+    await logActivity({
+      ctx,
+      action: "connection.update",
+      entityType: "RepositoryConnection",
+      entityId: connection.id,
+      details: { name: connection.name, type: connection.type, url: connection.url },
     });
 
     return NextResponse.json(toDTO(connection));
@@ -147,17 +143,12 @@ export async function DELETE(
       where: { id },
     });
 
-    await db.activityLog.create({
-      data: {
-        action: "connection_deleted",
-        entityType: "repository_connection",
-        entityId: id,
-        details: JSON.stringify({
-          name: existingConnection.name,
-          type: existingConnection.type,
-          url: existingConnection.url,
-        }),
-      },
+    await logActivity({
+      ctx,
+      action: "connection.delete",
+      entityType: "RepositoryConnection",
+      entityId: id,
+      details: { name: existingConnection.name, type: existingConnection.type, url: existingConnection.url },
     });
 
     return NextResponse.json({ success: true, message: "Connection deleted successfully" });

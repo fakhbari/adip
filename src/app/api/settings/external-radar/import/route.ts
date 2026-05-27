@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { requireAdmin } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 interface TechnologyInput {
   name: string;
@@ -26,6 +28,8 @@ interface ImportResult {
 }
 
 export async function POST(request: NextRequest) {
+  const ctx = await requireAdmin(request);
+  if (ctx instanceof NextResponse) return ctx;
   try {
     const body = await request.json();
     const { source, data } = body as { source: "thoughtworks" | "gartner"; data: ImportData };
@@ -240,18 +244,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Log activity
-    await db.activityLog.create({
-      data: {
-        action: "external_radar_import",
-        entityType: "settings",
-        details: JSON.stringify({
-          source,
-          added: result.added,
-          updated: result.updated,
-          version: result.version,
-        }),
-      },
+    await logActivity({
+      ctx,
+      action: "ai-provider.update",
+      entityType: "Settings",
+      details: { source, added: result.added, updated: result.updated, version: result.version },
     });
 
     return NextResponse.json(result);

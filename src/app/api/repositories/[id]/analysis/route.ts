@@ -5,6 +5,7 @@ import { enqueueAnalysis } from "@/lib/queue";
 import { requireTenant, assertOwnership } from "@/lib/tenant";
 import { AgentType } from "@/lib/agents/types";
 import { mapErrorToResponse } from "@/lib/api-errors";
+import { logActivity } from "@/lib/audit";
 
 // WebSocket notification helper.
 // Talks server-to-server to the mini-service. The previous `?XTransformPort=3003`
@@ -130,6 +131,13 @@ export async function POST(
         triggeredBy,
         enabledAgents: enabledAgents as AgentType[] | undefined,
       });
+      await logActivity({
+        ctx,
+        action: "analysis.start",
+        entityType: "AnalysisRun",
+        entityId: analysisRunId,
+        details: { repositoryId: id, triggeredBy, enabledAgents: enabledAgents as string[] | undefined },
+      });
 
       return NextResponse.json({
         success: true,
@@ -201,6 +209,7 @@ export async function DELETE(
       repositoryId: id,
       error: "Analysis was cancelled by user",
     });
+    await logActivity({ ctx, action: "analysis.cancel", entityType: "AnalysisRun", entityId: analysisRunId });
 
     return NextResponse.json({
       success: true,

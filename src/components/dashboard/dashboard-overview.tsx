@@ -124,6 +124,13 @@ const chartConfig = {
   },
 } satisfies ChartConfig;
 
+type MetricsSummary = {
+  runsPerDay: Array<{ day: string; ok: number; failed: number }>;
+  vcsLatencyP95: number | null;
+  activeJobs: number;
+  tokensTotal: number;
+};
+
 export function DashboardOverview() {
   const router = useRouter();
   const [stats, setStats] = useState<DashboardStats>(defaultStats);
@@ -133,6 +140,14 @@ export function DashboardOverview() {
   const [pickerRepos, setPickerRepos] = useState<{ id: string; name: string }[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [starting, setStarting] = useState(false);
+  // Polish P6.5 — operational tiles, admin only. 403 is harmless here;
+  // we just hide the section when the fetch fails.
+  const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
+  useEffect(() => {
+    void apiFetch<MetricsSummary>("/api/admin/metrics-summary").then((res) => {
+      if ("data" in res) setMetrics(res.data);
+    });
+  }, []);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -267,6 +282,43 @@ export function DashboardOverview() {
           )}
         </DialogContent>
       </Dialog>
+
+      {metrics && (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Runs / 7d</CardTitle></CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.runsPerDay.reduce((a, p) => a + p.ok + p.failed, 0)}</div>
+              <p className="text-xs text-muted-foreground">
+                {metrics.runsPerDay.reduce((a, p) => a + p.failed, 0)} failed
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">VCS p95 latency</CardTitle></CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {metrics.vcsLatencyP95 === null ? "—" : `${metrics.vcsLatencyP95.toFixed(2)}s`}
+              </div>
+              <p className="text-xs text-muted-foreground">last sliding window</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Active jobs</CardTitle></CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.activeJobs}</div>
+              <p className="text-xs text-muted-foreground">queue depth</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">LLM tokens</CardTitle></CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{metrics.tokensTotal.toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground">since process start</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

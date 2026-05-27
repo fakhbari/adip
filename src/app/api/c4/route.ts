@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { mapErrorToResponse } from "@/lib/api-errors";
+import { requireTenant, assertOwnership } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 export async function GET(request: NextRequest) {
   try {
@@ -71,9 +73,17 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const ctx = await requireTenant(request);
+  if (ctx instanceof NextResponse) return ctx;
   try {
     const body = await request.json();
     const { repositoryId, level, content } = body;
+
+    // Polish P5.3 — confirm the repository belongs to this tenant before
+    // attaching a document to it.
+    const repo = await db.repository.findUnique({ where: { id: repositoryId }, select: { tenantId: true } });
+    const own = assertOwnership(repo, ctx);
+    if (own) return own;
 
     const documentType = level === 1 ? "C4_CONTEXT" : level === 2 ? "C4_CONTAINER" : "C4_COMPONENT";
 
@@ -84,24 +94,21 @@ export async function POST(request: NextRequest) {
         status: "COMPLETED",
         content,
         generatedAt: new Date(),
-        generatedBy: "ADIP",
+        generatedBy: ctx.session.user.email,
       },
     });
 
-    // Log activity
-    await db.activityLog.create({
-      data: {
-        action: "C4_GENERATED",
-        entityType: "DOCUMENT",
-        entityId: document.id,
-        details: JSON.stringify({ repositoryId, level }),
-      },
+    await logActivity({
+      ctx,
+      action: "document.edit",
+      entityType: "Document",
+      entityId: document.id,
+      details: { repositoryId, level, type: documentType },
     });
 
     return NextResponse.json(document);
   } catch (error) {
-    console.error("Error creating C4 document:", error);
-    return NextResponse.json({ error: "Failed to create C4 document" }, { status: 500 });
+    return mapErrorToResponse(error);
   }
 }
 

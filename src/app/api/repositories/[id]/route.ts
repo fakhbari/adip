@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { parseLanguages, parseFrameworks } from "@/lib/repo-fields";
 import { requireTenant, assertOwnership } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 // GET /api/repositories/[id] - Get single repository
 export async function GET(
@@ -124,6 +125,7 @@ export async function DELETE(
 
     // Delete repository (cascade will handle related records)
     await db.repository.delete({ where: { id } });
+    await logActivity({ ctx, action: "repository.delete", entityType: "Repository", entityId: id });
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -184,6 +186,7 @@ export async function PUT(
       },
     });
 
+    await logActivity({ ctx, action: "repository.update", entityType: "Repository", entityId: id });
     return NextResponse.json(repository);
   } catch (error) {
     console.error("Error updating repository:", error);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
 import { requireTenant, withTenant } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 // Shape we return for a connection. Note: accessToken is never returned;
 // callers get a boolean indicator instead.
@@ -91,17 +92,12 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    await db.activityLog.create({
-      data: {
-        action: "connection_created",
-        entityType: "repository_connection",
-        entityId: connection.id,
-        details: JSON.stringify({
-          name,
-          type,
-          url: connection.url,
-        }),
-      },
+    await logActivity({
+      ctx,
+      action: "connection.create",
+      entityType: "RepositoryConnection",
+      entityId: connection.id,
+      details: { name, type, url: connection.url },
     });
 
     return NextResponse.json(toDTO(connection));

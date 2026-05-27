@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { encryptOptional } from "@/lib/crypto";
 import { requireTenant, withTenant } from "@/lib/tenant";
+import { logActivity } from "@/lib/audit";
 
 export async function GET(request: NextRequest) {
   try {
@@ -94,6 +95,13 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    await logActivity({
+      ctx,
+      action: "ai-provider.create",
+      entityType: "AIProvider",
+      entityId: provider.id,
+      details: { name, type, modelName },
+    });
     return NextResponse.json(provider);
   } catch (error) {
     console.error("Error creating AI provider:", error);

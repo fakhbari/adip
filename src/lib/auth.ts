@@ -8,6 +8,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
+import { logActivitySystem } from "@/lib/audit";
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(db),
@@ -67,6 +68,29 @@ export const authOptions: NextAuthOptions = {
         (session.user as { role?: string }).role = (token.role as string) ?? "user";
       }
       return session;
+    },
+  },
+  // Polish P5.3 — emit audit rows for sign-in / sign-out. We don't have a
+  // TenantContext at the NextAuth hook level so we use logActivitySystem
+  // (userId fixed to "system", tenantId null) and stash the actual userId
+  // in `details`. The audit log UI surfaces both.
+  events: {
+    async signIn(message) {
+      await logActivitySystem({
+        action: "signin.success",
+        entityType: "User",
+        entityId: (message.user as { id?: string }).id,
+        details: { email: message.user?.email ?? null, provider: message.account?.provider },
+      });
+    },
+    async signOut(message) {
+      const token = (message as { token?: { id?: string; email?: string } }).token;
+      await logActivitySystem({
+        action: "signout",
+        entityType: "User",
+        entityId: token?.id,
+        details: { email: token?.email ?? null },
+      });
     },
   },
 };

@@ -60,7 +60,9 @@ export type AuditAction =
   | "user.reactivate"
   // Documents
   | "document.edit"
-  | "document.regenerate";
+  | "document.regenerate"
+  // Notifications (Polish P6.4)
+  | "notification.retry";
 
 export type LogActivityArgs = {
   ctx: TenantContext;

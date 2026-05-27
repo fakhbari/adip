@@ -36,6 +36,9 @@ export const connection: ConnectionOptions = parseRedisUrl(REDIS_URL);
 
 // BullMQ disallows `:` in queue names (it uses `:` internally as a key separator).
 export const ANALYSIS_QUEUE = "adip-analysis";
+// Polish P6.4 — failed Slack / Teams deliveries land here for exponential-
+// backoff retries (max 5 attempts).
+export const NOTIFICATION_RETRY_QUEUE = "adip-notification-retry";
 
 export const analysisQueue = new Queue<AnalysisJobPayload>(ANALYSIS_QUEUE, {
   connection,
@@ -53,6 +56,23 @@ export type AnalysisJobPayload = {
   triggeredBy: "manual" | "scheduler" | "webhook";
   enabledAgents?: string[];
 };
+
+// Polish P6.4 — payload for a notification retry. Carries the delivery
+// row id so the worker can re-read the original payload + flip the row
+// back to "retrying" / "sent" / "failed".
+export type NotificationRetryPayload = {
+  deliveryId: string;
+};
+
+export const notificationRetryQueue = new Queue<NotificationRetryPayload>(NOTIFICATION_RETRY_QUEUE, {
+  connection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: { type: "exponential", delay: 60_000 },
+    removeOnComplete: { age: 7 * 24 * 60 * 60, count: 1000 },
+    removeOnFail: { age: 30 * 24 * 60 * 60 },
+  },
+});
 
 /**
  * Enqueue a new analysis. The TOCTOU guard (only one RUNNING per

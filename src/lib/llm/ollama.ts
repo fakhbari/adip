@@ -3,6 +3,7 @@
 
 import type { LLMProvider } from "./provider";
 import type {
+  ChatDelta,
   ChatMessage,
   ChatOptions,
   ChatResult,
@@ -11,6 +12,7 @@ import type {
   TokenUsage,
 } from "./types";
 import { recordUsage } from "./usage-tracker";
+import { iterateNDJSON } from "./stream-parsers";
 
 const DEFAULT_BASE_URL = "http://localhost:11434";
 
@@ -73,6 +75,69 @@ export class OllamaProvider implements LLMProvider {
       content: data.message?.content ?? "",
       usage,
       finishReason: data.done_reason === "stop" ? "stop" : "unknown",
+    };
+  }
+
+  /**
+   * Polish P4.2 — Ollama streaming. NDJSON on /api/chat with stream:true.
+   * Each line is a JSON object; final line has `done:true` plus usage.
+   */
+  async *stream(messages: ChatMessage[], opts?: ChatOptions): AsyncGenerator<ChatDelta> {
+    const res = await fetch(`${this.baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        stream: true,
+        options: {
+          temperature: opts?.temperature ?? this.defaultTemperature,
+          num_predict: opts?.maxTokens,
+        },
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Ollama stream ${res.status}: ${detail.slice(0, 500)}`);
+    }
+
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let doneReason: string | undefined;
+
+    for await (const frame of iterateNDJSON(res)) {
+      const f = frame as {
+        message?: { content?: string };
+        done?: boolean;
+        done_reason?: string;
+        prompt_eval_count?: number;
+        eval_count?: number;
+      };
+      if (f.message?.content) yield { delta: f.message.content };
+      if (f.done) {
+        promptTokens = f.prompt_eval_count ?? 0;
+        completionTokens = f.eval_count ?? 0;
+        doneReason = f.done_reason;
+      }
+    }
+
+    const usage: TokenUsage = {
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+    };
+    await recordUsage({
+      provider: this.kind,
+      model: this.model,
+      usage,
+      analysisRunId: opts?.meta?.analysisRunId as string | undefined,
+      repositoryId: opts?.meta?.repositoryId as string | undefined,
+      agentType: opts?.meta?.agentType as string | undefined,
+    });
+    yield {
+      delta: "",
+      finish: doneReason === "stop" ? "stop" : (doneReason as ChatResult["finishReason"]) ?? "unknown",
+      usage,
     };
   }
 

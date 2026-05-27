@@ -8,7 +8,7 @@
 
 import type { LLMProvider } from "./provider";
 import { OpenAIProvider } from "./openai";
-import type { ChatMessage, ChatOptions, ChatResult, EmbedOptions, EmbedResult } from "./types";
+import type { ChatDelta, ChatMessage, ChatOptions, ChatResult, EmbedOptions, EmbedResult } from "./types";
 
 const DEFAULT_BASE_URL = process.env.ADIP_SIDECAR_URL ?? "http://localhost:8080/v1";
 
@@ -36,6 +36,15 @@ export class VllmProvider implements LLMProvider {
 
   chat(messages: ChatMessage[], opts?: ChatOptions): Promise<ChatResult> {
     return this.inner.chat(messages, opts);
+  }
+
+  // Polish P4.2 — vLLM speaks OpenAI's SSE shape, delegate.
+  stream(messages: ChatMessage[], opts?: ChatOptions): AsyncIterable<ChatDelta> {
+    // The inner OpenAIProvider exposes stream(); narrow it for our LLMProvider contract.
+    const innerStream = (this.inner as unknown as {
+      stream: (m: ChatMessage[], o?: ChatOptions) => AsyncIterable<ChatDelta>;
+    }).stream;
+    return innerStream.call(this.inner, messages, opts);
   }
 
   embed(texts: string[], opts?: EmbedOptions): Promise<EmbedResult> {

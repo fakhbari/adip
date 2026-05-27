@@ -47,3 +47,38 @@ export const agentDurationSeconds = new Histogram({
   buckets: [1, 5, 15, 30, 60, 120, 300, 600, 900],
   registers: [metricsRegistry],
 });
+
+// Polish P6.3 — per-dependency gauges. Set from a periodic poll either in
+// the Next.js process (db pool) or in the WS service (clients). The
+// queue-depth gauge is updated each worker tick.
+//
+// NOTE: dbPool{Active,Idle} are sourced from Prisma's `$metrics.json()` if
+// the `metrics` preview feature is enabled in schema.prisma; otherwise both
+// stay at 0. The `/api/metrics` route attempts a best-effort sync each
+// scrape (see src/app/api/metrics/route.ts). Enabling the preview is a
+// follow-up migration — keep the gauges so the dashboard does not need a
+// later metric-name change.
+export const dbPoolActive = new Gauge({
+  name: "adip_db_pool_active",
+  help: "Active database connections in the pool.",
+  registers: [metricsRegistry],
+});
+
+export const dbPoolIdle = new Gauge({
+  name: "adip_db_pool_idle",
+  help: "Idle database connections in the pool.",
+  registers: [metricsRegistry],
+});
+
+export const wsClientsTotal = new Gauge({
+  name: "adip_ws_clients_total",
+  help: "Currently connected WebSocket clients.",
+  registers: [metricsRegistry],
+});
+
+export const notificationDeliveriesTotal = new Counter({
+  name: "adip_notification_deliveries_total",
+  help: "Notification deliveries by channel and status.",
+  labelNames: ["channel", "status"] as const,
+  registers: [metricsRegistry],
+});

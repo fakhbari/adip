@@ -60,6 +60,22 @@ export function assertOwnership(
 }
 
 /**
+ * Polish P1.6 / P1.7 — gate an admin-only route. Returns the context on
+ * success or a 403 NextResponse. Usage:
+ *
+ *   const ctx = await requireAdmin(request);
+ *   if (ctx instanceof NextResponse) return ctx;
+ */
+export async function requireAdmin(request: NextRequest | Request): Promise<TenantContext | NextResponse> {
+  const ctx = await requireTenant(request);
+  if (ctx instanceof NextResponse) return ctx;
+  if (ctx.session.user.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  return ctx;
+}
+
+/**
  * Compose a tenant filter into an existing Prisma `where` shape.
  *
  *   const where = withTenant({ isActive: true }, ctx);

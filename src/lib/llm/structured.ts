@@ -14,7 +14,7 @@
 
 import type { z } from "zod";
 import type { LLMProvider } from "./provider";
-import type { ChatMessage, ChatOptions, TokenUsage } from "./types";
+import type { ChatDelta, ChatMessage, ChatOptions, ChatResult, TokenUsage } from "./types";
 import { logger } from "@/lib/logger";
 
 const log = logger("llm.structured");
@@ -35,7 +35,77 @@ export class SchemaValidationError extends Error {
 
 export type RunWithSchemaOptions = ChatOptions & {
   maxAttempts?: number;
+  /**
+   * Polish P4.3 — streaming hooks. When provider supports `stream()`,
+   * `runWithSchema` consumes the deltas and fans them out via these
+   * callbacks. Used by the orchestrator to persist `llm-delta` RunEvents
+   * and push them to the live log page via the WS service.
+   *
+   * Callbacks are best-effort — runWithSchema swallows their errors so
+   * a flaky observer cannot break the LLM call.
+   */
+  onPrompt?: (messages: ChatMessage[], attempt: number) => void | Promise<void>;
+  onDelta?: (delta: string, attempt: number) => void | Promise<void>;
+  onFinal?: (content: string, usage: TokenUsage, attempt: number) => void | Promise<void>;
 };
+
+async function safeCall<T extends unknown[]>(fn: ((...args: T) => unknown) | undefined, ...args: T): Promise<void> {
+  if (!fn) return;
+  try {
+    await fn(...args);
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, "stream callback threw");
+  }
+}
+
+/**
+ * Polish P4.3 — drain provider.stream() while accumulating content and
+ * forwarding deltas to the caller. Returns the same shape as chat().
+ *
+ * If the stream throws halfway through, we surface the partial content
+ * via the thrown error's `.partial` field so the orchestrator can record
+ * an `llm-response` event with whatever the model managed to emit.
+ */
+async function streamToResult(
+  provider: LLMProvider,
+  messages: ChatMessage[],
+  opts: RunWithSchemaOptions | undefined,
+  attempt: number
+): Promise<ChatResult> {
+  if (!provider.stream) {
+    // Provider does not implement streaming — fall back to chat().
+    return provider.chat(messages, opts);
+  }
+  let content = "";
+  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let finish: ChatResult["finishReason"] = "unknown";
+  try {
+    const iter: AsyncIterable<ChatDelta> = provider.stream(messages, opts);
+    for await (const chunk of iter) {
+      if (chunk.delta) {
+        content += chunk.delta;
+        await safeCall(opts?.onDelta, chunk.delta, attempt);
+      }
+      if (chunk.finish) finish = chunk.finish;
+      if (chunk.usage) {
+        usage = {
+          promptTokens: chunk.usage.promptTokens ?? usage.promptTokens,
+          completionTokens: chunk.usage.completionTokens ?? usage.completionTokens,
+          totalTokens:
+            chunk.usage.totalTokens ??
+            (chunk.usage.promptTokens ?? usage.promptTokens) +
+              (chunk.usage.completionTokens ?? usage.completionTokens),
+        };
+      }
+    }
+    return { content, usage, finishReason: finish };
+  } catch (err) {
+    // Surface partial content so callers can still persist what we got.
+    const wrapped = err instanceof Error ? err : new Error(String(err));
+    (wrapped as Error & { partial?: string }).partial = content;
+    throw wrapped;
+  }
+}
 
 /**
  * Strip ``` fences and locate the first balanced JSON object/array in
@@ -92,10 +162,15 @@ export async function runWithSchema<T>(args: {
   let totalCompletionTokens = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const result = await args.provider.chat(messages, args.opts);
+    await safeCall(args.opts?.onPrompt, messages, attempt);
+    // Polish P4.3 — prefer streaming when the provider supports it so the
+    // live log page can render tokens as they arrive. Falls back to chat()
+    // transparently when no .stream() is implemented.
+    const result = await streamToResult(args.provider, messages, args.opts, attempt);
     totalPromptTokens += result.usage.promptTokens;
     totalCompletionTokens += result.usage.completionTokens;
     lastRaw = result.content;
+    await safeCall(args.opts?.onFinal, result.content, result.usage, attempt);
 
     let parsed: unknown;
     const candidate = extractJson(result.content);

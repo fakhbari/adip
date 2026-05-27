@@ -259,10 +259,23 @@ function emitLlmDelta(payload: {
   pendingLlm.set(key, { frames, timer });
 }
 
+// Polish P6.3 — expose a tiny `/metrics` endpoint with the connected-client
+// count. Prom-client is heavy for a mini-service; we render the one line by
+// hand to avoid pulling the registry in here.
+function renderMetrics(): string {
+  const count = io.sockets.sockets.size;
+  return `# HELP adip_ws_clients_total Currently connected WebSocket clients.\n# TYPE adip_ws_clients_total gauge\nadip_ws_clients_total ${count}\n`;
+}
+
 httpServer.on("request", async (req, res) => {
   // Health check (no auth needed). Lets `curl :3003/healthz` succeed for liveness probes.
   if (req.method === "GET" && req.url === "/healthz") {
     return reply(res, 200, { ok: true });
+  }
+  if (req.method === "GET" && req.url === "/metrics") {
+    res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" });
+    res.end(renderMetrics());
+    return;
   }
 
   let raw: string;

@@ -4,13 +4,19 @@ import { db } from "@/lib/db";
 import { createVCSClient, parseRepositoryUrl, FILE_PATTERNS, VCSClient, VCSFile } from "@/lib/vcs";
 import { decryptOptional } from "@/lib/crypto";
 import { parseLanguages } from "@/lib/repo-fields";
-import { logger } from "@/lib/logger";
+import { logger, withRequestContext } from "@/lib/logger";
 import { agentDurationSeconds, analysisRunsTotal } from "@/lib/metrics";
 import { RepoFileCache } from "./repo-file-cache";
 import { createLLMProvider, type LLMProvider } from "@/lib/llm";
+import { observeProvider } from "@/lib/llm/observed";
 import { recordRunEvent } from "@/lib/run-events";
+import { notifyWS } from "@/lib/ws-notify";
 
-const orchLog = logger("orchestrator");
+const orchLogBase = logger("orchestrator");
+// Module-level fallback; the executing instance rebinds to a request-scoped
+// child via withRequestContext (Polish P6.2) so every line carries the
+// analysisRunId + repositoryId + tenantId.
+const orchLog = orchLogBase;
 import type { DocumentType, Prisma } from "@prisma/client";
 
 // Prisma transaction client type — the subset of `db` available inside
@@ -194,6 +200,13 @@ export class AgentOrchestrator {
     this.startTime = Date.now();
     this.results = [];
     this.startHeartbeat();
+    // Polish P6.2 — every orchestrator log line for this run carries
+    // the bindings below. Threaded into AnalysisContext so VCS / LLM
+    // clients can re-bind their own children off it.
+    const runLog = withRequestContext(orchLogBase, {
+      analysisRunId: this.config.analysisRunId,
+      repositoryId: this.config.repositoryId,
+    });
 
     // Polish P4.1 — record run-start so the run-detail UI has a timeline
     // anchor even if the orchestrator throws before its first agent.
@@ -274,12 +287,19 @@ export class AgentOrchestrator {
       // Phase 2.5 — instantiate the LLM provider (if configured) so
       // agents can call it directly. A build failure here does not
       // fail the run — agents fall back to regex-only output.
+      // Polish P4.3 — wrap with observeProvider so every chat()/stream()
+      // call emits llm-prompt / llm-delta / llm-response RunEvents and
+      // pushes deltas to the live-log page via the WS service.
       let llm: LLMProvider | undefined;
       if (this.repository!.aiProvider) {
         try {
-          llm = createLLMProvider({
+          const raw = createLLMProvider({
             ...this.repository!.aiProvider,
             apiKey: decryptOptional(this.repository!.aiProvider.apiKey),
+          });
+          llm = observeProvider(raw, {
+            analysisRunId: this.config.analysisRunId,
+            repositoryId: this.config.repositoryId,
           });
         } catch (err) {
           orchLog.warn(
@@ -304,6 +324,8 @@ export class AgentOrchestrator {
         currentSha,
         llm,
         outputLocale: "fa",
+        // Polish P6.2 — give agents a request-scoped logger.
+        log: runLog,
       };
 
       // Step 5: Run agents in sequence
@@ -323,8 +345,41 @@ export class AgentOrchestrator {
           type: "agent-start",
           agentType: agent.getType(),
         });
+        // Polish P4.4 — also push `agent-event` to the live-log page so
+        // the right-hand stream can show "starting tech-radar-agent" before
+        // the first llm-delta arrives.
+        void notifyWS("agent-event", {
+          analysisRunId: this.config.analysisRunId,
+          repositoryId: this.config.repositoryId,
+          agentType: agent.getType(),
+          event: "start",
+        });
+        // Rebind context.llm so its observability scope carries this
+        // agent's type — callers without an explicit `opts.meta.agentType`
+        // will then tag their RunEvents correctly.
+        const agentScopedLLM = llm
+          ? observeProvider(
+              // Strip the outer wrapper so we don't double-emit events;
+              // observeProvider only reads `kind` / `model` / `chat` / `stream`,
+              // and a re-wrap is observationally identical to a fresh wrap.
+              {
+                kind: llm.kind,
+                model: llm.model,
+                chat: (m, o) => llm!.chat(m, o),
+                stream: llm!.stream
+                  ? (m, o) => llm!.stream!(m, o)
+                  : undefined,
+                embed: llm!.embed ? (t, o) => llm!.embed!(t, o) : undefined,
+              },
+              {
+                analysisRunId: this.config.analysisRunId,
+                repositoryId: this.config.repositoryId,
+                defaultAgentType: agent.getType(),
+              }
+            )
+          : undefined;
         const agentStart = Date.now();
-        const result = await agent.execute(context);
+        const result = await agent.execute({ ...context, llm: agentScopedLLM });
         const seconds = (Date.now() - agentStart) / 1000;
         agentDurationSeconds.labels(result.agentType, result.status).observe(seconds);
         this.results.push(result);
@@ -338,6 +393,13 @@ export class AgentOrchestrator {
             error: result.error,
             filesAnalyzed: result.filesAnalyzed,
           },
+        });
+        void notifyWS("agent-event", {
+          analysisRunId: this.config.analysisRunId,
+          repositoryId: this.config.repositoryId,
+          agentType: result.agentType,
+          event: result.status === "success" ? "end" : "failed",
+          error: result.error,
         });
 
         currentProgress += progressPerAgent;

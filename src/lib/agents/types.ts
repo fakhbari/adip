@@ -2,6 +2,7 @@
 
 import { AIProvider, Repository, RepositoryConnection } from "@prisma/client";
 import type { LLMProvider } from "@/lib/llm";
+import type { Logger } from "pino";
 
 // ============================================
 // Core Types
@@ -69,6 +70,10 @@ export interface AnalysisContext {
   llm?: LLMProvider;
   // The repository's preferred output locale (default "fa").
   outputLocale?: "en" | "fa";
+  // Polish P6.2 — request-scoped logger; carries analysisRunId/repositoryId/
+  // tenantId bindings. VCS + LLM clients can rebind a child off it so all
+  // structured lines for the run carry the same fields.
+  log?: Logger;
 }
 
 export interface FileInfo {

@@ -65,84 +65,84 @@ const navigation = [
     description: "Manage repositories",
   },
   {
-    href: "/radar",
-    name: "Tech Radar",
-    icon: Radar,
-    description: "Technology radar",
-  },
-  {
-    href: "/adr",
-    name: "ADR",
-    icon: FileText,
-    description: "Architecture Decisions",
-  },
-  {
-    href: "/c4",
-    name: "C4 Docs",
-    icon: Box,
-    description: "C4 Documentation",
-  },
-  {
-    href: "/openapi",
-    name: "OpenAPI",
-    icon: FileCode,
-    description: "API Specifications",
-  },
-  {
-    href: "/context-map",
-    name: "Context Map",
-    icon: Network,
-    description: "DDD Bounded Contexts",
-  },
-  {
-    href: "/asyncapi",
-    name: "AsyncAPI",
-    icon: Radio,
-    description: "Event-driven specs",
-  },
-  {
-    href: "/data-catalog",
-    name: "Data Catalog",
-    icon: Database,
-    description: "ERD & data dictionary",
-  },
-  {
     href: "/settings",
     name: "Settings",
     icon: Settings,
     description: "System configuration",
   },
+  // {
+  //   href: "/radar",
+  //   name: "Tech Radar",
+  //   icon: Radar,
+  //   description: "Technology radar",
+  // },
+  // {
+  //   href: "/adr",
+  //   name: "ADR",
+  //   icon: FileText,
+  //   description: "Architecture Decisions",
+  // },
+  // {
+  //   href: "/c4",
+  //   name: "C4 Docs",
+  //   icon: Box,
+  //   description: "C4 Documentation",
+  // },
+  // {
+  //   href: "/openapi",
+  //   name: "OpenAPI",
+  //   icon: FileCode,
+  //   description: "API Specifications",
+  // },
+  // {
+  //   href: "/context-map",
+  //   name: "Context Map",
+  //   icon: Network,
+  //   description: "DDD Bounded Contexts",
+  // },
+  // {
+  //   href: "/asyncapi",
+  //   name: "AsyncAPI",
+  //   icon: Radio,
+  //   description: "Event-driven specs",
+  // },
+  // {
+  //   href: "/data-catalog",
+  //   name: "Data Catalog",
+  //   icon: Database,
+  //   description: "ERD & data dictionary",
+  // },
 ];
 
 // Polish P1.6 / P1.7 / P1.8 / P6.4 — admin-only entries. Rendered as a
 // separate section in the sidebar so non-admin users do not see them
 // (we still 403 server-side via requireAdmin if they navigate manually).
-const adminNavigation = [
-  {
-    href: "/admin/users",
-    name: "Users",
-    icon: Users,
-    description: "Team & roles",
-  },
-  {
-    href: "/admin/audit",
-    name: "Audit Log",
-    icon: ShieldCheck,
-    description: "Activity history",
-  },
-  {
-    href: "/admin/usage",
-    name: "LLM Usage",
-    icon: Coins,
-    description: "Tokens & cost",
-  },
-  {
-    href: "/admin/notifications",
-    name: "Notifications",
-    icon: Send,
-    description: "Delivery log",
-  },
-];
+// const adminNavigation = [
+//   {
+//     href: "/admin/users",
+//     name: "Users",
+//     icon: Users,
+//     description: "Team & roles",
+//   },
+//   {
+//     href: "/admin/audit",
+//     name: "Audit Log",
+//     icon: ShieldCheck,
+//     description: "Activity history",
+//   },
+//   {
+//     href: "/admin/usage",
+//     name: "LLM Usage",
+//     icon: Coins,
+//     description: "Tokens & cost",
+//   },
+//   {
+//     href: "/admin/notifications",
+//     name: "Notifications",
+//     icon: Send,
+//     description: "Delivery log",
+//   },
+// ];
 
 interface SidebarContentProps {
   pathname: string;
@@ -193,35 +193,35 @@ function SidebarContent({ pathname, onClose, lastSync, isSyncing, onSync, isAdmi
           );
         })}
 
-        {isAdmin && (
-          <>
-            <div className="mt-4 mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Admin
-            </div>
-            {adminNavigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={onClose}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all hover:bg-accent",
-                    isActive
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <item.icon className={cn("h-5 w-5", isActive && "text-primary")} />
-                  <div className="flex flex-col items-start">
-                    <span>{item.name}</span>
-                    <span className="text-xs text-muted-foreground">{item.description}</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </>
-        )}
+        {/*{isAdmin && (*/}
+        {/*  <>*/}
+        {/*    <div className="mt-4 mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">*/}
+        {/*      Admin*/}
+        {/*    </div>*/}
+        {/*    {adminNavigation.map((item) => {*/}
+        {/*      const isActive = pathname === item.href || pathname.startsWith(item.href + "/");*/}
+        {/*      return (*/}
+        {/*        <Link*/}
+        {/*          key={item.href}*/}
+        {/*          href={item.href}*/}
+        {/*          onClick={onClose}*/}
+        {/*          className={cn(*/}
+        {/*            "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all hover:bg-accent",*/}
+        {/*            isActive*/}
+        {/*              ? "bg-primary/10 text-primary"*/}
+        {/*              : "text-muted-foreground hover:text-foreground"*/}
+        {/*          )}*/}
+        {/*        >*/}
+        {/*          <item.icon className={cn("h-5 w-5", isActive && "text-primary")} />*/}
+        {/*          <div className="flex flex-col items-start">*/}
+        {/*            <span>{item.name}</span>*/}
+        {/*            <span className="text-xs text-muted-foreground">{item.description}</span>*/}
+        {/*          </div>*/}
+        {/*        </Link>*/}
+        {/*      );*/}
+        {/*    })}*/}
+        {/*  </>*/}
+        {/*)}*/}
       </nav>
 
       {/* Sync Status */}

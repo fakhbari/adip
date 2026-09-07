@@ -23,6 +23,7 @@ import {
   FileJson,
   Loader2,
   Info,
+  ScrollText
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,7 +52,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { AIProvidersTab } from "./ai-providers-tab";
+import { AiProviderTab } from "./AiProviderTab";
+import RulesTab from "@/components/settings/RulesTab";
 
 interface RepositoryConnection {
   id: string;
@@ -470,10 +472,6 @@ export function SettingsPage() {
             <GitBranch className="mr-2 h-4 w-4" />
             Connections
           </TabsTrigger>
-          <TabsTrigger value="external-radars">
-            <Radar className="mr-2 h-4 w-4" />
-            External Radars
-          </TabsTrigger>
           <TabsTrigger value="scheduler">
             <Clock className="mr-2 h-4 w-4" />
             Scheduler
@@ -482,9 +480,9 @@ export function SettingsPage() {
             <Key className="mr-2 h-4 w-4" />
             AI Provider
           </TabsTrigger>
-          <TabsTrigger value="notifications">
-            <Bell className="mr-2 h-4 w-4" />
-            Notifications
+          <TabsTrigger value="rules">
+            <ScrollText className="mr-2 h-4 w-4" />
+            Rules
           </TabsTrigger>
         </TabsList>
 
@@ -733,225 +731,6 @@ export function SettingsPage() {
           </Dialog>
         </TabsContent>
 
-        {/* External Radars Import */}
-        <TabsContent value="external-radars">
-          <div className="grid gap-6">
-            {/* Import Status Cards */}
-            <div className="grid gap-4 md:grid-cols-2">
-              {externalRadarStatus.map((radar) => (
-                <Card key={radar.source}>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Radar className="h-5 w-5 text-primary" />
-                        <CardTitle className="text-lg capitalize">{radar.source} Radar</CardTitle>
-                      </div>
-                      {radar.lastImport && (
-                        <Badge variant="outline" className="bg-green-500/10 text-green-600">
-                          <CheckCircle className="mr-1 h-3 w-3" />
-                          Connected
-                        </Badge>
-                      )}
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Technologies:</span>
-                        <span className="font-medium">{radar.technologyCount}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Last Import:</span>
-                        <span className="font-medium">
-                          {radar.lastImport ? new Date(radar.lastImport).toLocaleString() : "Never"}
-                        </span>
-                      </div>
-                      {radar.version && (
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Version:</span>
-                          <span className="font-medium">{radar.version}</span>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-
-            {/* Import Card */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Import External Radar Data</CardTitle>
-                <CardDescription>
-                  Upload JSON files from ThoughtWorks Technology Radar or Gartner to compare with your organization&apos;s technology stack
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {/* Source Selection */}
-                <div className="space-y-2">
-                  <Label>Import Source</Label>
-                  <Select
-                    value={importSource}
-                    onValueChange={(value) => setImportSource(value as "thoughtworks" | "gartner")}
-                  >
-                    <SelectTrigger className="w-full md:w-64">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="thoughtworks">ThoughtWorks Technology Radar</SelectItem>
-                      <SelectItem value="gartner">Gartner Hype Cycle</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* File Upload */}
-                <div className="space-y-2">
-                  <Label>Upload JSON File</Label>
-                  <div className="flex flex-col gap-4 md:flex-row md:items-end">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".json"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                      id="radar-file-upload"
-                    />
-                    <Button
-                      variant="outline"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isImporting}
-                      className="w-full md:w-auto"
-                    >
-                      {isImporting ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <Upload className="mr-2 h-4 w-4" />
-                      )}
-                      {isImporting ? "Importing..." : "Choose JSON File"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => downloadTemplate(importSource)}
-                      className="w-full md:w-auto"
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Download Template
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Supported formats: JSON. Maximum file size: 10MB
-                  </p>
-                </div>
-
-                {/* Import Result */}
-                {importResult && (
-                  <Alert variant={importResult.success ? "default" : "destructive"} className={importResult.success ? "border-green-200 bg-green-50" : ""}>
-                    <div className="flex items-start gap-2">
-                      {importResult.success ? (
-                        <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
-                      ) : (
-                        <AlertTriangle className="h-4 w-4 mt-0.5" />
-                      )}
-                      <div className="flex-1">
-                        <AlertTitle>{importResult.success ? "Import Successful" : "Import Failed"}</AlertTitle>
-                        <AlertDescription className="mt-2">
-                          {importResult.success ? (
-                            <div className="space-y-2">
-                              <p>Added: {importResult.added} technologies</p>
-                              <p>Updated: {importResult.updated} technologies</p>
-                              {importResult.technologies.length > 0 && (
-                                <div className="mt-2">
-                                  <p className="font-medium text-sm">Technologies imported:</p>
-                                  <div className="flex flex-wrap gap-1 mt-1">
-                                    {importResult.technologies.slice(0, 20).map((tech) => (
-                                      <Badge key={tech} variant="outline" className="text-xs">
-                                        {tech}
-                                      </Badge>
-                                    ))}
-                                    {importResult.technologies.length > 20 && (
-                                      <Badge variant="outline" className="text-xs">
-                                        +{importResult.technologies.length - 20} more
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <ul className="list-disc list-inside space-y-1">
-                              {importResult.errors.map((error, idx) => (
-                                <li key={idx}>{error}</li>
-                              ))}
-                            </ul>
-                          )}
-                        </AlertDescription>
-                      </div>
-                    </div>
-                  </Alert>
-                )}
-
-                {/* JSON Format Guide */}
-                <Card className="bg-muted/50">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <Info className="h-4 w-4" />
-                      Expected JSON Format
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="text-xs bg-background p-3 rounded-md overflow-x-auto">
-{`{
-  "version": "29",
-  "date": "2024-01-15",
-  "technologies": [
-    {
-      "name": "React",
-      "quadrant": "languages-frameworks",
-      "ring": "adopt",  // adopt, trial, assess, hold
-      "category": "Framework",
-      "description": "UI component library",
-      "is_new": false
-    }
-  ]
-}`}
-                    </pre>
-                  </CardContent>
-                </Card>
-              </CardContent>
-            </Card>
-
-            {/* How to Get Data */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">How to Get External Radar Data</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <h4 className="font-medium flex items-center gap-2">
-                    <FileJson className="h-4 w-4" />
-                    ThoughtWorks Technology Radar
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Download the radar data from ThoughtWorks website or use AI tools to extract data from their PDF reports.
-                    The data should include technology names, rings (Adopt, Trial, Assess, Hold), and quadrants.
-                  </p>
-                </div>
-                <Separator />
-                <div className="space-y-2">
-                  <h4 className="font-medium flex items-center gap-2">
-                    <FileJson className="h-4 w-4" />
-                    Gartner Hype Cycle
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Extract technology data from Gartner Hype Cycle reports. Use AI tools to parse PDF reports and convert
-                    to JSON format. Include technology names and their positions on the hype cycle.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
         {/* Scheduler */}
         <TabsContent value="scheduler">
           <Card>
@@ -996,88 +775,14 @@ export function SettingsPage() {
 
         {/* AI Provider */}
         <TabsContent value="ai">
-          <AIProvidersTab />
+          <AiProviderTab />
         </TabsContent>
 
-        {/* Notifications */}
-        <TabsContent value="notifications">
-          <Card>
-            <CardHeader>
-              <CardTitle>Notification Settings</CardTitle>
-              <CardDescription>
-                Configure how you receive alerts and updates
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-base">Email Notifications</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Receive documentation updates via email
-                  </p>
-                </div>
-                <Switch
-                  checked={data?.settings.notifications.email}
-                  onCheckedChange={(checked) =>
-                    setData((prev) => ({
-                      ...prev!,
-                      settings: {
-                        ...prev!.settings,
-                        notifications: { ...prev!.settings.notifications, email: checked },
-                      },
-                    }))
-                  }
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-base">Slack Notifications</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Post updates to Slack channels
-                  </p>
-                </div>
-                <Switch
-                  checked={data?.settings.notifications.slack}
-                  onCheckedChange={(checked) =>
-                    setData((prev) => ({
-                      ...prev!,
-                      settings: {
-                        ...prev!.settings,
-                        notifications: { ...prev!.settings.notifications, slack: checked },
-                      },
-                    }))
-                  }
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-base">Microsoft Teams</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Post updates to Teams channels
-                  </p>
-                </div>
-                <Switch
-                  checked={data?.settings.notifications.teams}
-                  onCheckedChange={(checked) =>
-                    setData((prev) => ({
-                      ...prev!,
-                      settings: {
-                        ...prev!.settings,
-                        notifications: { ...prev!.settings.notifications, teams: checked },
-                      },
-                    }))
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
+        {/* Rules */}
+        <TabsContent value="rules">
+          <RulesTab />
         </TabsContent>
+
       </Tabs>
     </div>
   );
